@@ -213,6 +213,101 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   }
 }
 
+/*
+ * 카탈로그에만 있고 아무도 켜지 않는 지시가 없어야 한다.
+ * 언더랩이 그랬다 — 목록에는 있는데 어떤 규칙도 밀지 않아서, 어떤 상대·어떤
+ * 스쿼드에서도 화면에 뜬 적이 없었다. 있는 척하는 항목이 제일 나쁘다.
+ */
+{
+  const engineSrc = read('engine.js');
+  const rulesSrc = read('data/tactics.js');
+  const all = rulesSrc + engineSrc;
+  const dead = [];
+  for (const id of Object.keys(TD.TOGGLES)) {
+    const hits = [...all.matchAll(new RegExp(`(?<![a-zA-Z_0-9])${id}(?![a-zA-Z_0-9])`, 'g'))].length;
+    // 카탈로그 정의 한 줄을 뺀 나머지에서 최소 한 번은 밀려야 한다
+    if (hits <= 1) dead.push(`${id}(${TD.TOGGLES[id].ko})`);
+  }
+  assert.deepEqual(dead, [], `아무도 켜지 않는 지시: ${dead.join(', ')}`);
+
+  // 축도 마찬가지
+  const deadAxes = [];
+  for (const id of Object.keys(TD.AXES)) {
+    const hits = [...all.matchAll(new RegExp(`(?<![a-zA-Z_0-9])${id}(?![a-zA-Z_0-9])`, 'g'))].length;
+    if (hits <= 1) deadAxes.push(`${id}(${TD.AXES[id].ko})`);
+  }
+  assert.deepEqual(deadAxes, [], `아무도 밀지 않는 축: ${deadAxes.join(', ')}`);
+}
+
+// ── 오버랩과 언더랩은 그쪽 측면 선수의 역할로 갈린다 ──────────────────────
+/*
+ * 둘은 "측면을 공격한다"는 같은 말이 아니라 정반대의 배치다.
+ * 오버랩은 풀백이 측면 선수 바깥으로 돌고, 언더랩은 안쪽 하프 스페이스로 들어간다.
+ * 안으로 좁히는 인사이드 포워드 뒤에서 언더랩을 시키면 같은 공간에 둘이 서고,
+ * 측면을 잡는 정통 윙어 뒤에서 오버랩을 시키면 같은 줄에 둘이 선다.
+ */
+{
+  const mkP = (name, positions, attrs, base = 10, foot = 'R') => {
+    const a = {};
+    for (const id of RD.ATTR_ORDER) a[id] = base;
+    Object.assign(a, attrs);
+    return { id: name, name, positions, foot, attrs: a };
+  };
+  const wingSquad = [
+    mkP('GKx', ['GK'], { ref: 15, han: 14, cmd: 13, kic: 14, ono: 14, tro: 13 }, 12),
+    mkP('CBx1', ['DC'], { mar: 16, tck: 16, hea: 15, pos: 15, jum: 15, str: 15, pas: 12 }, 12),
+    mkP('CBx2', ['DC'], { mar: 14, tck: 14, hea: 13, pos: 14, pac: 14 }, 11),
+    // 인버티드로 뽑히지 않게 패스·테크닉을 낮춘다 — 인버티드 풀백은 안으로
+    // 들어오는 역할이라 오버랩/언더랩 판단 자체가 달라진다
+    mkP('RBx', ['DR'], { cro: 15, tck: 13, mar: 13, sta: 16, wor: 15, pac: 15, acc: 15, otb: 14, pas: 7, tec: 7, cmp: 7 }, 12),
+    mkP('LBx', ['DL'], { cro: 15, tck: 14, mar: 14, sta: 16, wor: 15, pac: 14, acc: 14, otb: 14, pas: 7, tec: 7, cmp: 7 }, 12, 'L'),
+    mkP('DMx1', ['DM'], { tck: 15, mar: 14, pos: 16, ant: 15, cnt: 14, tea: 15, wor: 15 }, 12),
+    mkP('DMx2', ['DM'], { pas: 15, fir: 14, tec: 14, vis: 14, dec: 14 }, 12),
+    mkP('AMx', ['AMC'], { pas: 15, fir: 15, tec: 15, otb: 15, ant: 15, dri: 14, acc: 15 }, 12),
+    // 왼쪽 — 측면을 잡고 크로스하는 정통 윙어 (같은 발)
+    mkP('LWing', ['AML'], { cro: 16, dri: 13, tec: 14, otb: 13, acc: 13, pac: 13, wor: 14 }, 11, 'L'),
+    // 오른쪽 — 안으로 접어 마무리하는 인사이드 포워드 (반대발, 크로스 나쁨)
+    mkP('RInside', ['AMR'], { dri: 16, fin: 15, tec: 15, otb: 15, ant: 14, acc: 16, pac: 16, agi: 16, cro: 8 }, 12, 'L'),
+    mkP('STx', ['ST'], { hea: 16, jum: 16, str: 16, bra: 15, fin: 14 }, 12),
+    mkP('SUBa', ['MC'], { pas: 12 }, 10), mkP('SUBb', ['DC'], { mar: 12 }, 10)
+  ];
+  const r = E.generate({
+    players: wingSquad, opponent: { formationId: '433dm', dline: 2, press: 2 },
+    context: {}, allowedFormations: ['4231']
+  });
+  const t = r.instructions.toggles;
+  const aml = r.xi.lineup.find((l) => l.slot.pos === 'AML');
+  const amr = r.xi.lineup.find((l) => l.slot.pos === 'AMR');
+  const dl = r.xi.lineup.find((l) => l.slot.pos === 'DL');
+  const dr = r.xi.lineup.find((l) => l.slot.pos === 'DR');
+  assert.ok((amr.role.tags || []).includes('inverted'), `오른쪽이 안으로 접는 역할이 아니다: ${amr.role.ko}`);
+  assert.ok(!(aml.role.tags || []).includes('inverted'), `왼쪽이 폭을 잡는 역할이 아니다: ${aml.role.ko}`);
+  // 인버티드 풀백이면 판단 자체가 달라지므로 이 검사의 전제가 깨진다
+  assert.ok(!(dl.role.tags || []).includes('inverted'), `왼쪽 수비가 인버티드다: ${dl.role.ko}`);
+  assert.ok(!(dr.role.tags || []).includes('inverted'), `오른쪽 수비가 인버티드다: ${dr.role.ko}`);
+
+  assert.ok(t.ovl_r.on, `안으로 접는 ${amr.role.ko} 뒤인데 오른쪽 오버랩이 꺼져 있다`);
+  assert.ok(!t.unl_r.on, `안으로 접는 ${amr.role.ko} 뒤인데 오른쪽 언더랩이 켜져 있다 — 같은 공간에 둘이 선다`);
+  assert.ok(t.unl_l.on, `측면을 잡는 ${aml.role.ko} 뒤인데 왼쪽 언더랩이 꺼져 있다`);
+  assert.ok(!t.ovl_l.on, `측면을 잡는 ${aml.role.ko} 뒤인데 왼쪽 오버랩이 켜져 있다 — 같은 줄에 둘이 선다`);
+
+  // 근거가 남아야 한다
+  for (const k of ['ovl_r', 'unl_l']) {
+    assert.ok(t[k].reasons.length, `${t[k].ko}에 근거가 없다`);
+    assert.ok(!/이\(가\)|은\(는\)/.test(t[k].reasons[0].why), `조사가 다듬어지지 않았다: ${t[k].reasons[0].why}`);
+  }
+
+  // 측면 자원이 없는 형태에서는 둘 다 켜지지 않아야 한다
+  const narrow = E.generate({
+    players: wingSquad, opponent: { formationId: '433dm' }, context: {}, allowedFormations: ['4312']
+  });
+  assert.ok(!narrow.instructions.toggles.ovl_l.on && !narrow.instructions.toggles.unl_l.on,
+    '측면 앞선 자원이 없는데 오버랩/언더랩을 켰다');
+
+  // 제공권이 좋은 최전방이면 띄우는 크로스, 배급은 후방 플레이메이커에게
+  assert.ok(t.cr_float.on || t.cr_whip.on, '크로스 종류를 정하지 않았다');
+}
+
 // ── 헝가리안 알고리즘 ─────────────────────────────────────────────────────
 {
   // 최소 비용 완전 매칭. 정답이 자명한 행렬로 확인한다.
@@ -1010,7 +1105,15 @@ function run(opponent = {}, context = {}, players = squad) {
   });
   assert.ok(flank.instructions.toggles.focus_r.on, '상대 왼쪽이 약한데 오른쪽 집중 공격이 안 켜졌다');
   assert.ok(!flank.instructions.toggles.focus_l.on, '집중 공격 방향이 양쪽 다 켜졌다');
-  assert.ok(flank.instructions.toggles.ovl_r.on, '상대 왼쪽이 약한데 오른쪽 오버랩이 안 켜졌다');
+  /*
+   * 그쪽 측면을 겹쳐 공격하는 지시가 켜져야 한다.
+   * 오버랩인지 언더랩인지는 그 측면 선수의 역할이 정한다 — 폭을 잡는 윙어 뒤에서
+   * 오버랩을 시키면 같은 줄에 둘이 서므로, 여기서 오버랩만 고집하면 안 된다.
+   */
+  assert.ok(flank.instructions.toggles.ovl_r.on || flank.instructions.toggles.unl_r.on,
+    '상대 왼쪽이 약한데 오른쪽에서 겹쳐 뛰는 지시가 하나도 없다');
+  assert.ok(!(flank.instructions.toggles.ovl_r.on && flank.instructions.toggles.unl_r.on),
+    '한쪽에 오버랩과 언더랩이 동시에 켜졌다 — 정반대의 움직임이다');
 }
 
 // 배타 그룹은 동시에 켜지지 않는다

@@ -76,6 +76,12 @@
     if (f === null) return '이';
     return f === '' ? '가' : '이';
   }
+  // '은/는'
+  function eun(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '은';
+    return f === '' ? '는' : '은';
+  }
 
   // 포지션 인접표 — 등록되지 않은 포지션이라도 여기 연결돼 있으면 부분 점수를 줍니다.
   var ADJACENT = {
@@ -1138,6 +1144,145 @@
     return res.map(function (j) { return j >= 0 && j < players.length ? players[j] : null; });
   }
 
+  /*
+   * 선발이 정해진 뒤에야 정할 수 있는 지시.
+   *
+   * 오버랩과 언더랩이 대표적입니다. 둘은 "측면을 공격한다"는 같은 말이 아니라
+   * 정반대의 배치입니다 — 오버랩은 풀백이 측면 선수 바깥으로 돌고, 언더랩은
+   * 안쪽(하프 스페이스)으로 들어갑니다. 어느 쪽이 맞는지는 그 측면 선수가
+   * 안으로 좁히는 유형인지 폭을 잡는 유형인지로 갈립니다. 상대만 보고는 정할 수
+   * 없어서, 선발을 짠 뒤에 여기서 정합니다.
+   */
+  function contextualInstructions(acc, xi, opp, ctx, planTop) {
+    if (!xi || !xi.lineup) return;
+    var lineup = xi.lineup;
+    var planIds = (planTop || []).map(function (p) { return p.id; });
+    function push(id, delta, why) {
+      if (acc.toggle[id] === undefined) return;
+      acc.toggle[id] += delta;
+      acc.reasons.toggle[id].push({ why: why, delta: delta });
+    }
+    function slotAt() {
+      var want = Array.prototype.slice.call(arguments);
+      return lineup.filter(function (l) { return want.indexOf(l.slot.pos) >= 0; })[0] || null;
+    }
+    function has(tagList, l) {
+      var t = (l.role.tags || []);
+      return tagList.some(function (x) { return t.indexOf(x) >= 0; });
+    }
+    function attrOf(l, id) {
+      var v = l.player && l.player.attrs ? l.player.attrs[id] : null;
+      return (typeof v === 'number' && v > 0) ? v : null;
+    }
+
+    // ── 오버랩 / 언더랩 ──────────────────────────────────────────────
+    [['l', 'AML', 'ML', 'DL', 'WBL', '왼쪽', 'ovl_l', 'unl_l'],
+     ['r', 'AMR', 'MR', 'DR', 'WBR', '오른쪽', 'ovl_r', 'unl_r']].forEach(function (S) {
+      var wideAtt = slotAt(S[1], S[2]);
+      var wideDef = slotAt(S[3], S[4]);
+      var sideKo = S[5], OVL = S[6], UNL = S[7];
+      if (!wideAtt || !wideDef) {
+        // 측면 자원이 없으면 풀백 자신이 폭입니다 — 겹칠 상대가 없습니다.
+        push(OVL, -1.5, sideKo + ' 측면에 앞선 자원이 없어 겹쳐 뛸 상대가 없습니다.');
+        push(UNL, -1.5, sideKo + ' 측면에 앞선 자원이 없어 겹쳐 뛸 상대가 없습니다.');
+        return;
+      }
+      if (wideDef.duty === 'd') {
+        push(OVL, -2, sideKo + ' 측면 수비가 수비 임무라 올라가지 않습니다.');
+        push(UNL, -2, sideKo + ' 측면 수비가 수비 임무라 올라가지 않습니다.');
+        return;
+      }
+      var inverted = has(['inverted', 'narrow-drift'], wideAtt);
+      var holdsWidth = !inverted && has(['width', 'crosser'], wideAtt);
+      // 인버티드 풀백·윙백은 역할 자체가 안쪽으로 들어옵니다. 그 선수에게
+      // 오버랩을 시키는 건 말이 안 되고, 언더랩은 이미 하고 있는 일입니다.
+      var defGoesWide = !has(['inverted'], wideDef);
+      var attKo = wideAtt.role.ko, defKo = wideDef.role.ko;
+      if (inverted && defGoesWide) {
+        push(OVL, 1.4, sideKo + ' ' + attKo + iga(attKo) + ' 안으로 좁히므로 ' + defKo + iga(defKo) + ' 바깥으로 돌아야 폭이 생깁니다.');
+        push(UNL, -2, sideKo + ' ' + attKo + iga(attKo) + ' 이미 안쪽에 있어 언더랩과 같은 공간을 씁니다.');
+      } else if (inverted) {
+        // 앞뒤가 모두 안으로 들어옵니다 — 지시로 될 문제가 아니라 조합 문제입니다.
+        push(OVL, -1.5, sideKo + ' ' + attKo + '와 ' + defKo + ' 둘 다 안으로 들어와 오버랩할 사람이 없습니다.');
+        push(UNL, -1.5, sideKo + ' ' + attKo + '와 ' + defKo + ' 둘 다 안쪽 공간을 씁니다.');
+      } else if (holdsWidth && !defGoesWide) {
+        push(UNL, -1.5, sideKo + ' ' + defKo + eun(defKo) + ' 역할 자체가 안쪽으로 들어오므로 언더랩 지시가 겹칩니다.');
+        push(OVL, -1.5, sideKo + ' ' + attKo + iga(attKo) + ' 측면을 잡고 있어 오버랩할 공간이 없습니다.');
+      } else if (holdsWidth) {
+        push(UNL, 1.4, sideKo + ' ' + attKo + iga(attKo) + ' 측면을 잡고 있으므로 ' + defKo + eun(defKo) + ' 안쪽 하프 스페이스로 들어가야 겹치지 않습니다.');
+        push(OVL, -2, sideKo + ' ' + attKo + iga(attKo) + ' 이미 측면에 있어 오버랩하면 같은 자리에 둘이 섭니다.');
+      }
+    });
+
+    // ── 크로스 종류 ─────────────────────────────────────────────────
+    var boxMen = lineup.filter(function (l) { return ['ST', 'AMC'].indexOf(l.slot.pos) >= 0; });
+    var bestAerial = null, fastest = null;
+    boxMen.forEach(function (l) {
+      var hea = attrOf(l, 'hea'), jum = attrOf(l, 'jum'), pac = attrOf(l, 'pac');
+      if (hea !== null && jum !== null && (!bestAerial || hea + jum > bestAerial.v)) bestAerial = { l: l, v: hea + jum, hea: hea, jum: jum };
+      if (pac !== null && (!fastest || pac > fastest.v)) fastest = { l: l, v: pac };
+    });
+    if (bestAerial && bestAerial.hea >= 15 && bestAerial.jum >= 15) {
+      push('cr_float', 1.2, bestAerial.l.player.name + '의 헤딩 ' + bestAerial.hea + ' · 점프 ' + bestAerial.jum + ' — 띄워 주면 경합에서 이깁니다.');
+    } else if (bestAerial && bestAerial.hea >= 13) {
+      push('cr_whip', 1.2, bestAerial.l.player.name + '의 제공권이 압도적이지는 않습니다(헤딩 ' + bestAerial.hea + ') — 빠르게 휘어 들어가는 공이 경합을 줄여 줍니다.');
+    } else if (fastest && fastest.v >= 15) {
+      push('cr_low', 1.2, fastest.l.player.name + '의 속도 ' + fastest.v + ' — 제공권 대신 낮고 빠른 공으로 달려 들어가게 합니다.');
+    }
+    // 골라인까지 vs 깊은 지점 — 측면 선수가 뚫을 수 있으면 끝까지, 아니면 일찍.
+    var wideMen = lineup.filter(function (l) { return ['AMR', 'AML', 'MR', 'ML'].indexOf(l.slot.pos) >= 0; });
+    var dribbler = wideMen.some(function (l) { return (attrOf(l, 'dri') || 0) >= 14 && (attrOf(l, 'acc') || 0) >= 14; });
+    var crosser = wideMen.some(function (l) { return (attrOf(l, 'cro') || 0) >= 14; });
+    if (planIds.indexOf('wide-cross') >= 0 || acc.toggle.cr_float > 0 || acc.toggle.cr_whip > 0) {
+      if (dribbler) push('cr_byline', 1, '측면에 상대를 벗겨낼 수 있는 선수가 있어 골라인까지 파고드는 편이 낫습니다.');
+      else if (crosser) push('cr_deep', 1, '측면 선수가 돌파형은 아니지만 크로스가 좋습니다 — 깊이 들어가기 전에 올리는 편이 낫습니다.');
+    }
+
+    // ── 골키퍼 배급 대상 ────────────────────────────────────────────
+    var deepPm = lineup.filter(function (l) {
+      return ['DM', 'MC'].indexOf(l.slot.pos) >= 0 && has(['playmaker', 'creator-deep'], l);
+    })[0];
+    var buildCb = lineup.filter(function (l) {
+      return l.slot.pos === 'DC' && has(['buildout'], l);
+    })[0];
+    var oppPress = opp && opp.press >= 3 && opp.loe >= 3;
+    if (!oppPress) {
+      if (deepPm) {
+        push('gk_pm', 1.2, deepPm.player
+          ? (deepPm.player.name + iga(deepPm.player.name) + ' ' + deepPm.role.ko + '로 배급을 맡습니다 — 골키퍼가 그쪽으로 주면 전개가 한 단계 빨라집니다.')
+          : '후방 배급을 맡는 역할이 있습니다.');
+      } else if (buildCb) {
+        push('gk_cb', 1.2, buildCb.role.ko + '가 있어 센터백에서 전개를 시작할 수 있습니다.');
+      } else {
+        var fb = slotAt('DR', 'DL', 'WBR', 'WBL');
+        if (fb && fb.duty !== 'd') {
+          push('gk_fb', 1, '후방에 배급을 맡을 역할이 없습니다 — 압박이 덜한 측면 수비로 빼는 편이 안전합니다.');
+        }
+      }
+    }
+
+    // ── 천천히 진행 ─────────────────────────────────────────────────
+    if ((ctx && ctx.goal === 'draw-ok') || planIds.indexOf('low-block') >= 0) {
+      push('distslow', 1.2, ctx && ctx.goal === 'draw-ok'
+        ? '무승부도 받아들일 수 있는 경기입니다 — 골키퍼가 서둘러 내보낼 이유가 없습니다.'
+        : '내려앉는 방향이라 골키퍼가 급하게 내보내면 그대로 소유권을 넘깁니다.');
+    }
+
+    // ── 안쪽/바깥쪽 유도 ────────────────────────────────────────────
+    // 상대가 중앙이 두꺼우면 바깥으로 밀어냅니다. 단 우리 측면이 버틸 수 있을 때만.
+    var ourSum = summariseFormation(xi.formation);
+    if (opp && opp.formationId && FORMATION_BY_ID[opp.formationId]) {
+      var t = summariseFormation(FORMATION_BY_ID[opp.formationId]);
+      var centreGap = t.centre - ourSum.centre;
+      var wideOk = ourSum.wideCover >= t.wideAttack + 1;
+      if ((centreGap >= 1 || (opp.traits || []).indexOf('playmaker-amc') >= 0) && wideOk) {
+        push('trap_out', 1.3, centreGap >= 1
+          ? ('상대 중앙 인원이 ' + centreGap + '명 많습니다 — 중앙에서 맞붙지 말고 바깥으로 밀어내는 편이 낫습니다(우리 측면은 ' + ourSum.wideCover + '명으로 버팁니다).')
+          : '상대 중앙에 경기를 만드는 선수가 있습니다 — 공을 바깥으로 밀어내면 그 선수를 거치지 않게 됩니다.');
+      }
+    }
+  }
+
   // ── 팀 밸런스 경고 ────────────────────────────────────────────────────
   function balanceWarnings(xi, axes, toggles, squad, opp) {
     var w = [];
@@ -1557,6 +1702,7 @@
     var acc = accumulate(fired);
     // 상대가 없으므로 플랜은 우리가 고른 것으로 고정합니다.
     var planTop = [{ id: best.planId, ko: TD.PLANS[best.planId].ko, desc: TD.PLANS[best.planId].desc, score: best.score }];
+    contextualInstructions(acc, best.xi, opp, ctx, planTop);
     var instructions = finaliseInstructions(acc, planTop);
     var warnings = balanceWarnings(best.xi, instructions.axes, instructions.toggles, xiSquad, opp);
     var pis = individualInstructions(best.xi, opp, planTop, instructions.axes);
@@ -1947,6 +2093,8 @@
     var plans = resolvePlans(acc.plan);
     var planW = planRoleWeights(plans.top);
     var xi = buildXI(players, first.formation, planW, acc.role, { mentalityShift: acc.axis.mentality });
+    // 선발이 정해진 뒤에야 정할 수 있는 지시(오버랩/언더랩, 크로스 종류, 배급 대상 …)
+    contextualInstructions(acc, xi, opp, ctx, plans.top);
     var instructions = finaliseInstructions(acc, plans.top);
     var warnings = balanceWarnings(xi, instructions.axes, instructions.toggles, xiSquad, opp);
     var pis = individualInstructions(xi, opp, plans.top, instructions.axes);
@@ -2001,10 +2149,11 @@
   }
 
   root.FM_ENGINE = {
+    contextualInstructions: contextualInstructions,
     opponentLineupNotes: opponentLineupNotes,
     inMatchAdvice: inMatchAdvice,
     splitAvailable: splitAvailable,
-    josa: { ro: ro, eul: eul, iga: iga },
+    josa: { ro: ro, eul: eul, iga: iga, eun: eun },
     generate: generate,
     baseTactic: baseTactic,
     squadNeeds: squadNeeds,
