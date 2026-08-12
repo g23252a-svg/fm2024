@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="description" content="풋볼매니저 2024 맞춤형 전술 생성기 — 내 스쿼드와 상대 전술을 넣으면 포메이션·역할·임무·팀 지시·개인 지시와 상대 대응 전략을 만들어 줍니다.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FM24 전술">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<title>FM24 맞춤형 전술 생성기</title>
+<style>
+:root{
+  --bg:#0a0e14; --panel:#111823; --panel2:#18202d; --panel3:#1e2836;
+  --line:#26324a; --line2:#334259;
+  --text:#e7eef8; --dim:#8fa0ba; --dim2:#647691;
+  --acc:#4ade80; --acc2:#38bdf8; --warn:#fbbf24; --danger:#f87171; --violet:#a78bfa;
+  --duty-d:#60a5fa; --duty-s:#fbbf24; --duty-a:#f87171;
+  --r:12px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",
+        "Malgun Gothic",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--font);
+  font-size:15px; line-height:1.6; padding-bottom:env(safe-area-inset-bottom);
+  overflow-wrap:break-word;
+}
+h1,h2,h3,h4{margin:0;font-weight:700;line-height:1.35}
+button{font-family:inherit;font-size:inherit;color:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:inherit}
+a{color:var(--acc2)}
+
+.skip{position:absolute;left:-9999px}
+.skip:focus{left:8px;top:8px;z-index:99;background:var(--acc);color:#04140a;padding:8px 14px;border-radius:8px}
+
+/* ── 헤더 ── */
+.top{
+  position:sticky;top:0;z-index:30;background:rgba(10,14,20,.94);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
+  padding:10px 14px calc(env(safe-area-inset-top,0px)*0 + 0px);
+  padding-top:calc(10px + env(safe-area-inset-top,0px));
+}
+.top .brand{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.top .brand svg{width:24px;height:24px;flex:0 0 auto}
+.top h1{font-size:16px;letter-spacing:-.2px}
+.top .sub{font-size:11.5px;color:var(--dim2);font-weight:500}
+nav.tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{
+  flex:0 0 auto;background:transparent;border:1px solid transparent;
+  padding:7px 13px;border-radius:999px;font-size:13.5px;font-weight:600;color:var(--dim);
+  white-space:nowrap;transition:.14s;
+}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button[aria-current="true"]{background:var(--panel3);border-color:var(--line2);color:var(--text)}
+nav.tabs .badge{
+  display:inline-block;min-width:17px;padding:0 4px;margin-left:5px;border-radius:999px;
+  background:var(--line2);font-size:10.5px;font-weight:700;color:var(--text);text-align:center;
+}
+
+main{max-width:1080px;margin:0 auto;padding:14px}
+section[hidden]{display:none}
+
+/* ── 카드 ── */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px}
+.card > h2{font-size:14.5px;margin-bottom:4px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.card > .desc{font-size:12.5px;color:var(--dim2);margin-bottom:11px}
+.card.tight{padding:11px}
+
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grow{flex:1 1 auto;min-width:0}
+.muted{color:var(--dim2)}
+.small{font-size:12.5px}
+.tiny{font-size:11.5px}
+.mono{font-variant-numeric:tabular-nums}
+
+/* ── 버튼 ── */
+.btn{
+  background:var(--panel3);border:1px solid var(--line2);border-radius:9px;
+  padding:8px 13px;font-size:13.5px;font-weight:600;transition:.14s;
+}
+.btn:hover{border-color:var(--dim2);background:var(--panel2)}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#04140a}
+.btn.pri:hover{background:#6ee7a0;border-color:#6ee7a0}
+.btn.ghost{background:transparent}
+.btn.sm{padding:5px 10px;font-size:12.5px;border-radius:7px}
+.btn.danger{color:var(--danger);border-color:#4a2530}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+/* ── 입력 ── */
+label.f{display:block;font-size:12px;font-weight:600;color:var(--dim);margin-bottom:4px}
+input[type=text],input[type=number],select,textarea{
+  width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:8px 10px;color:var(--text);
+}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--acc2);outline-offset:-1px;border-color:transparent}
+textarea{min-height:110px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5}
+.field{margin-bottom:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+@media(max-width:560px){.grid3{grid-template-columns:1fr 1fr}}
+
+/* 세그먼트 선택 */
+.seg{display:flex;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{flex:1;background:var(--panel2);border:0;padding:7px 6px;font-size:12.5px;font-weight:600;color:var(--dim);border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--acc2);color:#031722}
+
+/* 슬라이더 */
+.slider{margin-bottom:13px}
+.slider .lab{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px}
+.slider .lab b{font-size:12.5px;font-weight:600;color:var(--dim)}
+.slider .lab span{font-size:12.5px;font-weight:700;color:var(--acc2)}
+input[type=range]{width:100%;accent-color:var(--acc2);background:transparent}
+
+/* 체크 태그 */
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:999px;padding:5px 11px;font-size:12.5px;font-weight:600;
+  color:var(--dim);transition:.14s;
+}
+.chip:hover{border-color:var(--dim2)}
+.chip[aria-pressed="true"]{background:rgba(74,222,128,.13);border-color:var(--acc);color:var(--acc)}
+
+/* ── 피치 ── */
+.pitch{
+  position:relative;width:100%;aspect-ratio:68/100;max-width:430px;margin:0 auto;
+  background:linear-gradient(180deg,#12351f 0%,#0f2c1a 55%,#0d2716 100%);
+  border:1px solid #1f4a2d;border-radius:10px;overflow:hidden;
+}
+.pitch .line{position:absolute;background:rgba(255,255,255,.13)}
+.pitch .hline{left:0;right:0;height:1px}
+.pitch .box{position:absolute;border:1px solid rgba(255,255,255,.13);border-top:0}
+.pitch .circle{
+  position:absolute;left:50%;top:50%;width:26%;aspect-ratio:1;transform:translate(-50%,-50%);
+  border:1px solid rgba(255,255,255,.13);border-radius:50%;
+}
+.pl{
+  position:absolute;transform:translate(-50%,-50%);width:66px;text-align:center;
+}
+.pl .bubble{
+  background:var(--panel3);border:1.5px solid var(--line2);border-radius:9px;
+  padding:3px 2px 4px;box-shadow:0 2px 8px rgba(0,0,0,.45);
+}
+.pl.d .bubble{border-color:var(--duty-d)}
+.pl.s .bubble{border-color:var(--duty-s)}
+.pl.a .bubble{border-color:var(--duty-a)}
+.pl .rl{font-size:10.5px;font-weight:800;letter-spacing:.2px;line-height:1.3}
+.pl .dt{font-size:9px;font-weight:700;line-height:1.25;opacity:.85}
+.pl.d .dt{color:var(--duty-d)} .pl.s .dt{color:var(--duty-s)} .pl.a .dt{color:var(--duty-a)}
+/* 이름은 두 줄까지 접습니다 — 한 줄로 자르면 「예시 공격…」처럼 구분되는 부분이 잘립니다. */
+.pl .nm{font-size:9.5px;color:#cfe0f2;margin-top:2px;line-height:1.22;overflow:hidden;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  max-height:2.5em;word-break:keep-all}
+.pl .fitbar{height:2px;border-radius:2px;background:rgba(255,255,255,.14);margin-top:2px;overflow:hidden}
+.pl .fitbar i{display:block;height:100%;background:var(--acc)}
+.pitch.mini{aspect-ratio:68/94;max-width:none}
+.pitch.mini .dot{
+  position:absolute;width:9px;height:9px;border-radius:50%;background:var(--acc);
+  transform:translate(-50%,-50%);
+}
+
+/* ── 결과 ── */
+.summary{display:grid;grid-template-columns:repeat(4,auto);gap:6px 20px;margin-bottom:11px}
+.summary .sv{font-size:18px;font-weight:800;line-height:1.3}
+@media(max-width:620px){
+  .summary{grid-template-columns:1fr 1fr;gap:8px 14px}
+  .summary .sv{font-size:16.5px}
+}
+.legend{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:9px;font-size:11.5px;color:var(--dim2)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+
+.lineup{display:flex;flex-direction:column;gap:6px}
+.lu{
+  display:flex;gap:9px;align-items:flex-start;background:var(--panel2);
+  border:1px solid var(--line);border-left-width:3px;border-radius:9px;padding:8px 10px;
+}
+.lu.d{border-left-color:var(--duty-d)} .lu.s{border-left-color:var(--duty-s)} .lu.a{border-left-color:var(--duty-a)}
+.lu .pos{flex:0 0 46px;font-size:11px;font-weight:800;color:var(--dim2);padding-top:2px}
+.lu .mid{flex:1 1 auto;min-width:0}
+.lu .role{font-size:13.5px;font-weight:700}
+.lu .role em{font-style:normal;font-size:11.5px;font-weight:700;margin-left:5px}
+.lu.d .role em{color:var(--duty-d)} .lu.s .role em{color:var(--duty-s)} .lu.a .role em{color:var(--duty-a)}
+.lu .who{font-size:12.5px;color:var(--dim);margin-top:1px}
+.lu .note{font-size:11.5px;color:var(--dim2);margin-top:4px;line-height:1.5}
+.lu .fit{flex:0 0 42px;text-align:right;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+.lu .fit small{display:block;font-size:9.5px;font-weight:600;color:var(--dim2)}
+
+.instr{display:flex;flex-direction:column;gap:5px}
+.ins{
+  background:var(--panel2);border:1px solid var(--line);border-radius:8px;overflow:hidden;
+}
+.ins > button{
+  display:flex;width:100%;gap:9px;align-items:center;background:transparent;border:0;
+  padding:8px 11px;text-align:left;
+}
+.ins .k{flex:1 1 auto;font-size:13px;font-weight:600;min-width:0}
+.ins .v{font-size:12.5px;font-weight:700;color:var(--acc2);white-space:nowrap}
+.ins.on .v{color:var(--acc)}
+.ins.def .v{color:var(--dim2)}
+.ins .caret{color:var(--dim2);font-size:10px;flex:0 0 auto}
+.ins .why{padding:0 11px 10px 11px;font-size:12px;color:var(--dim);border-top:1px solid var(--line)}
+.ins .why ul{margin:8px 0 0;padding-left:16px}
+.ins .why li{margin-bottom:3px}
+.ins .why .dd{color:var(--dim2);font-variant-numeric:tabular-nums}
+
+.brief{display:flex;flex-direction:column;gap:9px}
+.bi{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.bi.key{border-color:#2c4a35;background:rgba(74,222,128,.055)}
+.bi .g{font-size:10.5px;font-weight:800;color:var(--dim2);letter-spacing:.4px;margin-bottom:3px}
+.bi .w{font-size:13px;font-weight:600;margin-bottom:5px}
+.bi .a{font-size:12.5px;color:var(--dim);line-height:1.6}
+
+.warn{display:flex;gap:8px;background:rgba(251,191,36,.08);border:1px solid #4a3c17;
+  border-radius:9px;padding:9px 11px;font-size:12.5px;line-height:1.55;margin-bottom:6px}
+.warn.high{background:rgba(248,113,113,.08);border-color:#4a2226}
+.warn .ic{flex:0 0 auto;font-weight:800}
+.warn.high .ic{color:var(--danger)} .warn .ic{color:var(--warn)}
+
+.pi{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:7px}
+.pi h4{font-size:13px;margin-bottom:6px}
+.pi h4 small{font-weight:600;color:var(--dim2);margin-left:6px;font-size:11.5px}
+.pi ul{margin:0;padding-left:0;list-style:none}
+.pi li{margin-bottom:6px;font-size:12.5px}
+.pi li b{display:inline-block;background:var(--panel3);border:1px solid var(--line2);
+  border-radius:6px;padding:1px 7px;font-size:12px;margin-right:6px}
+.pi li.lock b{border-style:dashed;color:var(--dim)}
+.pi li .r{color:var(--dim2);font-size:11.5px;display:block;margin-top:2px}
+
+.fopt{
+  display:flex;gap:9px;align-items:center;width:100%;text-align:left;
+  background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:6px;
+}
+.fopt[aria-pressed="true"]{border-color:var(--acc);background:rgba(74,222,128,.07)}
+.fopt .n{flex:1 1 auto;min-width:0}
+.fopt .n b{font-size:13.5px}
+.fopt .n span{display:block;font-size:11.5px;color:var(--dim2);margin-top:1px}
+.fopt .sc{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--acc)}
+
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:7px}
+.fbtn{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:7px 4px;text-align:center}
+.fbtn[aria-pressed="true"]{border-color:var(--acc2);background:rgba(56,189,248,.1)}
+.fbtn .fb-pitch{position:relative;width:100%;aspect-ratio:68/94;background:#12251a;border-radius:5px;margin-bottom:5px}
+.fbtn .fb-pitch i{position:absolute;width:6px;height:6px;border-radius:50%;background:#5fbf85;transform:translate(-50%,-50%)}
+.fbtn b{font-size:11.5px;font-weight:700}
+
+/* 선수 목록 */
+.plist{display:flex;flex-direction:column;gap:5px}
+.prow{display:flex;gap:9px;align-items:center;background:var(--panel2);border:1px solid var(--line);
+  border-radius:9px;padding:7px 10px}
+.prow .nm{flex:1 1 auto;min-width:0;font-size:13.5px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prow .ps{font-size:11px;color:var(--dim2);font-weight:600}
+.prow .cov{flex:0 0 auto;font-size:11px;color:var(--dim2);font-variant-numeric:tabular-nums}
+.prow .cov b{color:var(--acc)}
+
+.attrgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:6px}
+.attrgrid .a{display:flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:7px;padding:3px 4px 3px 8px}
+.attrgrid .a label{flex:1 1 auto;font-size:11.5px;color:var(--dim);min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attrgrid .a input{width:44px;flex:0 0 auto;padding:3px 5px;text-align:center;font-size:12.5px}
+.agroup{margin-bottom:11px}
+.agroup > .h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.agroup > .h b{font-size:12px;color:var(--dim)}
+
+.rep{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+  font-size:12.5px;line-height:1.65;margin-top:10px}
+.rep.err{border-color:#4a2226;background:rgba(248,113,113,.07)}
+.rep b{color:var(--acc)}
+
+details.help{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+  padding:10px 12px;margin-bottom:8px}
+details.help summary{cursor:pointer;font-size:13.5px;font-weight:600;list-style:none}
+details.help summary::-webkit-details-marker{display:none}
+details.help summary::before{content:"▸ ";color:var(--dim2)}
+details.help[open] summary::before{content:"▾ "}
+details.help .body{font-size:13px;color:var(--dim);line-height:1.7;margin-top:9px}
+details.help .body ol,details.help .body ul{padding-left:19px;margin:7px 0}
+details.help .body li{margin-bottom:5px}
+details.help .body code{background:var(--panel3);border:1px solid var(--line);border-radius:5px;
+  padding:1px 5px;font-size:11.5px;font-family:ui-monospace,Menlo,monospace}
+details.help .body strong{color:var(--text)}
+
+.empty{text-align:center;padding:26px 14px;color:var(--dim2);font-size:13px}
+.empty b{display:block;color:var(--text);font-size:14.5px;margin-bottom:5px}
+
+.toast{
+  position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(90px);
+  background:var(--panel3);border:1px solid var(--line2);border-radius:10px;
+  padding:10px 18px;font-size:13px;font-weight:600;z-index:60;transition:transform .22s;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);max-width:calc(100vw - 32px);
+}
+.toast.show{transform:translateX(-50%) translateY(0)}
+
+.sticky-actions{position:sticky;bottom:0;background:linear-gradient(180deg,rgba(10,14,20,0),rgba(10,14,20,.96) 34%);
+  padding:14px 0 calc(10px + env(safe-area-inset-bottom,0px));margin-top:4px;z-index:20}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">본문 바로가기</a>
+
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="#4ade80" stroke-width="1.6"/><path d="M12 6.6l3.4 2.5-1.3 4h-4.2l-1.3-4z" fill="#4ade80"/><path d="M12 2.4v4.2M4.1 9.1l4 2.9M19.9 9.1l-4 2.9M7.4 20.4l2.5-7.3M16.6 20.4l-2.5-7.3" stroke="#4ade80" stroke-width="1.2" fill="none"/></svg>
+    <div>
+      <h1>FM24 맞춤형 전술 생성기</h1>
+      <div class="sub">스쿼드 · 상대 전술 → 포메이션 · 역할 · 팀 지시 · 개인 지시</div>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs" aria-label="화면 전환"></nav>
+</header>
+
+<main id="main">
+  <section id="tab-squad"></section>
+  <section id="tab-opp" hidden></section>
+  <section id="tab-result" hidden></section>
+  <section id="tab-match" hidden></section>
+  <section id="tab-guide" hidden></section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="data/roles.js"></script>
+<script src="data/formations.js"></script>
+<script src="data/tactics.js"></script>
+<script src="engine.js"></script>
+<script src="importer.js"></script>
+<script>
+(function () {
+  'use strict';
+  var RD = window.FM_ROLE_DATA, FD = window.FM_FORMATION_DATA,
+      TD = window.FM_TACTIC_DATA, E = window.FM_ENGINE, IMP = window.FM_IMPORTER;
+
+  // ── 상태 ────────────────────────────────────────────────────────────────
+  var STORE = 'fm24tactics.v1';
+  var S = {
+    players: [],
+    opponent: {
+      formationId: '4231', mentality: 3, dline: 2, loe: 2, press: 2,
+      width: 3, directness: 2, tempo: 2,
+      transitionLost: 'regroup', transitionWon: 'hold', traits: [], keyPlayer: ''
+    },
+    context: { venue: 'home', odds: 'even', goal: 'win' },
+    pinnedFormation: null,
+    tab: 'squad',
+    editing: null
+  };
+
+  function save() {
+    try {
+      localStorage.setItem(STORE, JSON.stringify({
+        players: S.players, opponent: S.opponent, context: S.context, pinnedFormation: S.pinnedFormation
+      }));
+    } catch (e) { /* 저장 공간이 없어도 이번 세션은 그대로 씁니다 */ }
+  }
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORE);
+      if (!raw) return;
+      var d = JSON.parse(raw);
+      if (d.players) S.players = d.players;
+      if (d.opponent) Object.assign(S.opponent, d.opponent);
+      if (d.context) Object.assign(S.context, d.context);
+      if (d.pinnedFormation) S.pinnedFormation = d.pinnedFormation;
+    } catch (e) { /* 깨진 저장본은 무시하고 초기 상태로 */ }
+  }
+
+  // ── 도우미 ──────────────────────────────────────────────────────────────
+  function h(tag, attrs, children) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'class') el.className = attrs[k];
+      else if (k === 'text') el.textContent = attrs[k];
+      else if (k === 'html') el.innerHTML = attrs[k];
+      else if (k.slice(0, 2) === 'on') el.addEventListener(k.slice(2), attrs[k]);
+      else if (attrs[k] === true) el.setAttribute(k, '');
+      else if (attrs[k] !== false && attrs[k] != null) el.setAttribute(k, attrs[k]);
+    });
+    (children || []).forEach(function (c) {
+      if (c == null || c === false) return;
+      el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    });
+    return el;
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) {
+    return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
+  function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); return el; }
+
+  var toastTimer = null;
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2400);
+  }
+
+  // ── 탭 ──────────────────────────────────────────────────────────────────
+  var TABS = [
+    { id: 'squad', ko: '스쿼드' },
+    { id: 'opp', ko: '상대' },
+    { id: 'result', ko: '전술' },
+    { id: 'match', ko: '경기 중' },
+    { id: 'guide', ko: '안내' }
+  ];
+  function renderTabs() {
+    var nav = clear(document.getElementById('tabs'));
+    TABS.forEach(function (t) {
+      var kids = [document.createTextNode(t.ko)];
+      if (t.id === 'squad' && S.players.length) {
+        kids.push(h('span', { class: 'badge', text: String(S.players.length) }));
+      }
+      nav.appendChild(h('button', {
+        'aria-current': S.tab === t.id ? 'true' : 'false',
+        onclick: function () { S.tab = t.id; render(); window.scrollTo(0, 0); }
+      }, kids));
+    });
+  }
+
+  function render() {
+    renderTabs();
+    TABS.forEach(function (t) {
+      var sec = document.getElementById('tab-' + t.id);
+      sec.hidden = S.tab !== t.id;
+      if (S.tab === t.id) { clear(sec); RENDER[t.id](sec); }
+    });
+  }
+
+  // ── 피치 그리기 ─────────────────────────────────────────────────────────
+  function pitchFrame(cls) {
+    var p = h('div', { class: 'pitch' + (cls ? ' ' + cls : '') });
+    p.appendChild(h('div', { class: 'line hline', style: 'top:50%' }));
+    p.appendChild(h('div', { class: 'circle' }));
+    p.appendChild(h('div', { class: 'box', style: 'left:22%;right:22%;top:0;height:15%;border-top:0;border-bottom:1px solid rgba(255,255,255,.13)' }));
+    p.appendChild(h('div', { class: 'box', style: 'left:22%;right:22%;bottom:0;height:15%;border-bottom:0' }));
+    return p;
+  }
+  // y=0이 우리 골문이므로 화면 아래쪽입니다.
+  function toTop(y) { return (100 - y) + '%'; }
+
+  function miniPitch(formation) {
+    var p = h('div', { class: 'fb-pitch' });
+    formation.slots.forEach(function (s) {
+      p.appendChild(h('i', { style: 'left:' + s.x + '%;top:' + toTop(s.y) }));
+    });
+    return p;
+  }
+
+  function bigPitch(lineup) {
+    var p = pitchFrame();
+    lineup.forEach(function (l) {
+      var duty = l.duty === 'a' ? 'a' : (l.duty === 's' ? 's' : 'd');
+      var fit = l.fit == null ? 0 : l.fit;
+      p.appendChild(h('div', {
+        class: 'pl ' + duty,
+        style: 'left:' + l.slot.x + '%;top:' + toTop(l.slot.y)
+      }, [
+        h('div', { class: 'bubble' }, [
+          h('div', { class: 'rl', text: l.role.abbr }),
+          h('div', { class: 'dt', text: RD.DUTIES[l.duty].ko }),
+          h('div', { class: 'nm', text: l.player ? l.player.name : '—' }),
+          h('div', { class: 'fitbar' }, [h('i', { style: 'width:' + fit + '%' })])
+        ])
+      ]));
+    });
+    return p;
+  }
+
+  // ── 스쿼드 탭 ───────────────────────────────────────────────────────────
+  var RENDER = {};
+
+  RENDER.squad = function (root) {
+    // 가져오기
+    var ta, repBox;
+    var card = h('div', { class: 'card' }, [
+      h('h2', { text: '스쿼드 가져오기' }),
+      h('div', { class: 'desc', text: 'FM에서 내보낸 파일을 올리거나 표를 그대로 붙여넣으세요. 방법은 「안내」 탭에 단계별로 적어 두었습니다.' }),
+      h('div', { class: 'row', style: 'margin-bottom:9px' }, [
+        (function () {
+          var input = h('input', {
+            type: 'file', accept: '.html,.htm,.rtf,.txt,.csv,.tsv',
+            style: 'display:none',
+            onchange: function (ev) {
+              var f = ev.target.files && ev.target.files[0];
+              if (!f) return;
+              var fr = new FileReader();
+              fr.onload = function () { doImport(String(fr.result)); };
+              fr.readAsText(f, 'utf-8');
+              ev.target.value = '';
+            }
+          });
+          var btn = h('button', { class: 'btn', onclick: function () { input.click(); } }, ['파일 선택']);
+          var wrap = h('span', {}, [input, btn]);
+          return wrap;
+        })(),
+        h('button', { class: 'btn', onclick: function () { doImport(ta.value); } }, ['붙여넣은 내용 가져오기']),
+        h('button', { class: 'btn ghost sm', onclick: loadDemo }, ['예시 스쿼드 넣기'])
+      ]),
+      (ta = h('textarea', {
+        placeholder: 'FM 화면에서 복사한 표 또는 내보낸 HTML/RTF 내용을 여기에 붙여넣으세요.',
+        'aria-label': '스쿼드 데이터 붙여넣기'
+      })),
+      (repBox = h('div'))
+    ]);
+    root.appendChild(card);
+
+    function doImport(text) {
+      if (!text || !text.trim()) { toast('가져올 내용이 비어 있습니다.'); return; }
+      var res = IMP.parseSquad(text);
+      clear(repBox);
+      var r = res.report;
+      if (r.error || !res.players.length) {
+        repBox.appendChild(h('div', { class: 'rep err' }, [
+          h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }), r.error || '선수를 하나도 읽지 못했습니다.']),
+          h('div', { class: 'tiny muted', style: 'margin-top:6px',
+            text: '읽은 형식: ' + r.format + ' · 표 행 수: ' + (r.rows || 0) })
+        ]));
+        return;
+      }
+      // 같은 이름은 덮어쓰고 새 이름은 추가합니다.
+      var byName = {};
+      S.players.forEach(function (p, i) { byName[p.name] = i; });
+      var added = 0, updated = 0;
+      res.players.forEach(function (p) {
+        if (byName[p.name] !== undefined) { S.players[byName[p.name]] = p; updated++; }
+        else { S.players.push(p); added++; }
+      });
+      save();
+      var lines = [
+        h('div', {}, [h('b', { text: added + '명 추가' }), updated ? (' · ' + updated + '명 갱신') : '',
+          ' · 능력치 열 ' + r.attrColumns + '개 인식'])
+      ];
+      if (r.noPosition) lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + r.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
+      if (r.noAttrs) lines.push(h('div', { class: 'tiny muted', text: '능력치가 하나도 없는 선수 ' + r.noAttrs + '명.' }));
+      if (r.unknownColumns && r.unknownColumns.length) {
+        lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' + r.unknownColumns.slice(0, 12).join(', ') + (r.unknownColumns.length > 12 ? ' 외 ' + (r.unknownColumns.length - 12) + '개' : '') }));
+      }
+      repBox.appendChild(h('div', { class: 'rep' }, lines));
+      ta.value = '';
+      render();
+    }
+
+    // 선수 목록
+    var listCard = h('div', { class: 'card' }, [
+      h('h2', {}, ['선수 ', h('span', { class: 'muted small', text: '(' + S.players.length + '명)' })]),
+      h('div', { class: 'desc', text: '능력치를 모르는 항목은 비워 두세요. 빈칸은 0이 아니라 「모름」으로 처리되고, 결과에 반영 정도가 표시됩니다.' })
+    ]);
+    if (!S.players.length) {
+      listCard.appendChild(h('div', { class: 'empty' }, [
+        h('b', { text: '아직 선수가 없습니다' }),
+        '위에서 FM 파일을 가져오거나, 예시 스쿼드로 먼저 둘러보세요.'
+      ]));
+    } else {
+      var list = h('div', { class: 'plist' });
+      S.players.forEach(function (p, i) {
+        var known = Object.keys(p.attrs || {}).filter(function (k) { return p.attrs[k] > 0; }).length;
+        list.appendChild(h('div', { class: 'prow' }, [
+          h('div', { class: 'grow', style: 'min-width:0' }, [
+            h('div', { class: 'nm', text: p.name }),
+            h('div', { class: 'ps', text: (p.positions || []).join(' · ') || '포지션 없음' })
+          ]),
+          h('div', { class: 'cov' }, [h('b', { text: String(known) }), '/' + RD.ATTR_ORDER.length]),
+          h('button', {
+            class: 'btn sm ghost',
+            onclick: function () {
+              S.editing = i; render();
+              var box = document.getElementById('playerEditor');
+              if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+          }, ['편집']),
+          h('button', {
+            class: 'btn sm ghost danger', 'aria-label': p.name + ' 삭제',
+            onclick: function () { S.players.splice(i, 1); save(); render(); }
+          }, ['×'])
+        ]));
+      });
+      listCard.appendChild(list);
+      listCard.appendChild(h('div', { class: 'row', style: 'margin-top:11px' }, [
+        h('button', { class: 'btn sm ghost danger', onclick: function () {
+          if (confirm('선수 ' + S.players.length + '명을 모두 지웁니다. 계속할까요?')) {
+            S.players = []; S.editing = null; save(); render();
+          }
+        } }, ['전체 삭제'])
+      ]));
+    }
+    listCard.appendChild(h('div', { class: 'row', style: 'margin-top:9px' }, [
+      h('button', { class: 'btn', onclick: function () {
+        S.players.push({ id: 'm' + Date.now(), name: '새 선수', positions: [], foot: 'B', attrs: {} });
+        S.editing = S.players.length - 1; save(); render();
+      } }, ['+ 직접 추가'])
+    ]));
+    root.appendChild(listCard);
+
+    if (S.editing !== null && S.players[S.editing]) root.appendChild(playerEditor(S.players[S.editing]));
+
+    root.appendChild(h('div', { class: 'sticky-actions' }, [
+      h('button', {
+        class: 'btn pri', style: 'width:100%',
+        onclick: function () { S.tab = 'opp'; render(); window.scrollTo(0, 0); }
+      }, ['상대 전술 입력하기 →'])
+    ]));
+  };
+
+  function playerEditor(p) {
+    var card = h('div', { class: 'card', id: 'playerEditor' });
+    card.appendChild(h('h2', { text: '선수 편집' }));
+    card.appendChild(h('div', { class: 'grid2' }, [
+      h('div', { class: 'field' }, [
+        h('label', { class: 'f', text: '이름' }),
+        h('input', { type: 'text', value: p.name, oninput: function (e) { p.name = e.target.value; save(); } })
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', { class: 'f', text: '주발' }),
+        (function () {
+          var seg = h('div', { class: 'seg' });
+          [['R', '오른발'], ['L', '왼발'], ['B', '양발']].forEach(function (o) {
+            seg.appendChild(h('button', {
+              'aria-pressed': (p.foot || 'B') === o[0] ? 'true' : 'false',
+              onclick: function () { p.foot = o[0]; save(); render(); }
+            }, [o[1]]));
+          });
+          return seg;
+        })()
+      ])
+    ]));
+
+    card.appendChild(h('label', { class: 'f', text: '포지션 (여러 개 선택 가능)' }));
+    var chips = h('div', { class: 'chips', style: 'margin-bottom:12px' });
+    RD.POSITIONS.forEach(function (pos) {
+      chips.appendChild(h('button', {
+        class: 'chip', 'aria-pressed': (p.positions || []).indexOf(pos.id) >= 0 ? 'true' : 'false',
+        onclick: function () {
+          p.positions = p.positions || [];
+          var i = p.positions.indexOf(pos.id);
+          if (i >= 0) p.positions.splice(i, 1); else p.positions.push(pos.id);
+          save(); render();
+        }
+      }, [pos.ko]));
+    });
+    card.appendChild(chips);
+
+    var groups = [['gk', 'GK'], ['tec', '기술'], ['men', '정신'], ['phy', '신체']];
+    groups.forEach(function (g) {
+      var ids = RD.ATTR_ORDER.filter(function (id) { return RD.ATTRS[id].group === g[0]; });
+      var grid = h('div', { class: 'attrgrid' });
+      ids.forEach(function (id) {
+        grid.appendChild(h('div', { class: 'a' }, [
+          h('label', { for: 'at_' + id, text: RD.ATTRS[id].ko }),
+          h('input', {
+            id: 'at_' + id, type: 'number', min: '1', max: '20', inputmode: 'numeric',
+            value: p.attrs && p.attrs[id] ? p.attrs[id] : '',
+            oninput: function (e) {
+              p.attrs = p.attrs || {};
+              var v = parseInt(e.target.value, 10);
+              if (isFinite(v) && v >= 1 && v <= 20) p.attrs[id] = v; else delete p.attrs[id];
+              save();
+            }
+          })
+        ]));
+      });
+      card.appendChild(h('div', { class: 'agroup' }, [
+        h('div', { class: 'h' }, [
+          h('b', { text: g[1] }),
+          h('button', {
+            class: 'btn sm ghost',
+            onclick: function () {
+              var v = prompt(g[1] + ' 능력치를 한 번에 채웁니다 (1~20). 이미 입력한 값도 덮어씁니다.', '10');
+              var n = parseInt(v, 10);
+              if (!isFinite(n) || n < 1 || n > 20) return;
+              p.attrs = p.attrs || {};
+              ids.forEach(function (id) { p.attrs[id] = n; });
+              save(); render();
+            }
+          }, ['일괄 입력']),
+          h('button', {
+            class: 'btn sm ghost',
+            onclick: function () {
+              p.attrs = p.attrs || {};
+              ids.forEach(function (id) { delete p.attrs[id]; });
+              save(); render();
+            }
+          }, ['비우기'])
+        ]),
+        grid
+      ]));
+    });
+
+    card.appendChild(h('div', { class: 'row' }, [
+      h('button', { class: 'btn pri', onclick: function () { S.editing = null; render(); } }, ['편집 끝내기'])
+    ]));
+    return card;
+  }
+
+  // ── 상대 탭 ─────────────────────────────────────────────────────────────
+  function sliderRow(label, axisKey, value, labels, onChange) {
+    var out = h('span', { text: labels[value] });
+    return h('div', { class: 'slider' }, [
+      h('div', { class: 'lab' }, [h('b', { text: label }), out]),
+      h('input', {
+        type: 'range', min: '0', max: String(labels.length - 1), step: '1', value: String(value),
+        'aria-label': label,
+        oninput: function (e) {
+          var v = parseInt(e.target.value, 10);
+          out.textContent = labels[v];
+          onChange(v);
+        }
+      })
+    ]);
+  }
+
+  RENDER.opp = function (root) {
+    var o = S.opponent;
+
+    var fcard = h('div', { class: 'card' }, [
+      h('h2', { text: '상대 포메이션' }),
+      h('div', { class: 'desc', text: '모르면 비워 두어도 됩니다 — 형태 맞물림 분석만 빠지고 나머지는 그대로 나옵니다.' })
+    ]);
+    var fgrid = h('div', { class: 'fgrid' });
+    fgrid.appendChild(h('button', {
+      class: 'fbtn', 'aria-pressed': !o.formationId ? 'true' : 'false',
+      onclick: function () { o.formationId = null; save(); render(); }
+    }, [h('div', { class: 'fb-pitch' }), h('b', { text: '모름' })]));
+    FD.FORMATIONS.forEach(function (f) {
+      fgrid.appendChild(h('button', {
+        class: 'fbtn', 'aria-pressed': o.formationId === f.id ? 'true' : 'false',
+        onclick: function () { o.formationId = f.id; save(); render(); }
+      }, [miniPitch(f), h('b', { text: f.ko })]));
+    });
+    fcard.appendChild(fgrid);
+    root.appendChild(fcard);
+
+    var scard = h('div', { class: 'card' }, [
+      h('h2', { text: '상대 전술 성향' }),
+      h('div', { class: 'desc', text: '경기 전 스카우트 보고서나 지난 경기에서 본 대로 맞추면 됩니다. 확실하지 않으면 표준으로 두세요.' })
+    ]);
+    [
+      ['멘탈리티', 'mentality', TD.AXES.mentality.labels],
+      ['수비 라인', 'dline', TD.AXES.dline.labels],
+      ['압박 시작 위치', 'loe', TD.AXES.loe.labels],
+      ['압박 강도', 'press', TD.AXES.press.labels],
+      ['공격 폭', 'width', TD.AXES.width.labels],
+      ['패스 길이', 'directness', TD.AXES.directness.labels],
+      ['템포', 'tempo', TD.AXES.tempo.labels]
+    ].forEach(function (row) {
+      scard.appendChild(sliderRow(row[0], row[1], o[row[1]], row[2], function (v) {
+        o[row[1]] = v; save();
+      }));
+    });
+    scard.appendChild(h('div', { class: 'grid2' }, [
+      h('div', {}, [
+        h('label', { class: 'f', text: '공을 잃었을 때' }),
+        segment([['regroup', '재정비'], ['counterpress', '역압박']], o.transitionLost, function (v) {
+          o.transitionLost = v; save(); render();
+        })
+      ]),
+      h('div', {}, [
+        h('label', { class: 'f', text: '공을 얻었을 때' }),
+        segment([['hold', '대형 유지'], ['counter', '역습']], o.transitionWon, function (v) {
+          o.transitionWon = v; save(); render();
+        })
+      ])
+    ]));
+    root.appendChild(scard);
+
+    var tcard = h('div', { class: 'card' }, [
+      h('h2', { text: '상대 특징' }),
+      h('div', { class: 'desc', text: '해당하는 것만 고르세요. 여기서 고른 항목이 대응 브리핑의 핵심 항목이 됩니다.' })
+    ]);
+    var tchips = h('div', { class: 'chips' });
+    TD.OPP_TRAITS.forEach(function (t) {
+      tchips.appendChild(h('button', {
+        class: 'chip', title: t.hint,
+        'aria-pressed': o.traits.indexOf(t.id) >= 0 ? 'true' : 'false',
+        onclick: function () {
+          var i = o.traits.indexOf(t.id);
+          if (i >= 0) o.traits.splice(i, 1); else o.traits.push(t.id);
+          save(); render();
+        }
+      }, [t.ko]));
+    });
+    tcard.appendChild(tchips);
+    tcard.appendChild(h('div', { class: 'field', style: 'margin-top:12px' }, [
+      h('label', { class: 'f', text: '전담 마크할 상대 핵심 선수 (선택)' }),
+      h('input', {
+        type: 'text', value: o.keyPlayer || '', placeholder: '예: 10번 데 브라위너',
+        oninput: function (e) { o.keyPlayer = e.target.value; save(); }
+      })
+    ]));
+    root.appendChild(tcard);
+
+    var ccard = h('div', { class: 'card' }, [h('h2', { text: '경기 상황' })]);
+    ccard.appendChild(h('div', { class: 'grid3' }, [
+      h('div', {}, [h('label', { class: 'f', text: '장소' }),
+        segment([['home', '홈'], ['away', '원정']], S.context.venue, function (v) { S.context.venue = v; save(); render(); })]),
+      h('div', {}, [h('label', { class: 'f', text: '전력 차' }),
+        segment([['strong', '우세'], ['even', '비슷'], ['weak', '열세']], S.context.odds, function (v) { S.context.odds = v; save(); render(); })]),
+      h('div', {}, [h('label', { class: 'f', text: '목표' }),
+        segment([['win', '승리'], ['draw-ok', '무승부 가능'], ['must-win', '반드시 승리']], S.context.goal, function (v) { S.context.goal = v; save(); render(); })])
+    ]));
+    root.appendChild(ccard);
+
+    root.appendChild(h('div', { class: 'sticky-actions' }, [
+      h('button', {
+        class: 'btn pri', style: 'width:100%',
+        onclick: function () { S.tab = 'result'; render(); window.scrollTo(0, 0); }
+      }, ['전술 만들기 →'])
+    ]));
+  };
+
+  function segment(options, value, onChange) {
+    var seg = h('div', { class: 'seg' });
+    options.forEach(function (o) {
+      seg.appendChild(h('button', {
+        'aria-pressed': value === o[0] ? 'true' : 'false',
+        onclick: function () { onChange(o[0]); }
+      }, [o[1]]));
+    });
+    return seg;
+  }
+
+  // ── 결과 탭 ─────────────────────────────────────────────────────────────
+  var lastResult = null;
+
+  RENDER.result = function (root) {
+    if (!S.players.length) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'empty' }, [
+          h('b', { text: '스쿼드가 비어 있습니다' }),
+          '전술을 만들려면 선수가 필요합니다. 「스쿼드」 탭에서 FM 파일을 가져오거나 예시 스쿼드를 넣어 보세요.'
+        ]),
+        h('div', { class: 'row', style: 'justify-content:center' }, [
+          h('button', { class: 'btn pri', onclick: function () { S.tab = 'squad'; render(); } }, ['스쿼드로 이동'])
+        ])
+      ]));
+      return;
+    }
+
+    var res;
+    try {
+      res = E.generate({
+        players: S.players,
+        opponent: S.opponent,
+        context: S.context,
+        allowedFormations: S.pinnedFormation ? [S.pinnedFormation] : null
+      });
+    } catch (err) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'rep err' }, ['전술을 만드는 중 문제가 생겼습니다: ' + (err && err.message)])
+      ]));
+      return;
+    }
+    lastResult = res;
+
+    // 요약
+    var oppF = res.opponentFormation;
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '전술 요약' }),
+      h('div', { class: 'summary' }, [
+        summaryCell('우리 포메이션', res.xi.formation.ko, ''),
+        summaryCell('전술 방향', res.plans.top.map(function (p) { return p.ko; }).join(' + '), 'var(--acc)'),
+        summaryCell('멘탈리티', res.instructions.axes.mentality.label, 'var(--acc2)'),
+        summaryCell('상대', oppF ? oppF.ko : '모름', '')
+      ]),
+      h('div', { class: 'small muted', text: res.plans.top.map(function (p) { return TD.PLANS[p.id].desc; }).join(' ') }),
+      bigPitch(res.xi.lineup),
+      h('div', { class: 'legend' }, [
+        h('span', {}, [h('i', { style: 'background:var(--duty-d)' }), '수비 임무']),
+        h('span', {}, [h('i', { style: 'background:var(--duty-s)' }), '지원 임무']),
+        h('span', {}, [h('i', { style: 'background:var(--duty-a)' }), '공격 임무'])
+      ]),
+      h('div', { class: 'row', style: 'margin-top:12px' }, [
+        h('button', { class: 'btn', onclick: function () { copyPlan(res); } }, ['전술 텍스트로 복사']),
+        S.pinnedFormation
+          ? h('button', { class: 'btn ghost sm', onclick: function () { S.pinnedFormation = null; save(); render(); } },
+              ['포메이션 고정 해제'])
+          : null
+      ])
+    ]));
+
+    // 경고
+    if (res.warnings.length) {
+      var wc = h('div', { class: 'card' }, [
+        h('h2', { text: '점검할 점' }),
+        h('div', { class: 'desc', text: '이 조합에서 실제로 문제가 되는 부분입니다.' })
+      ]);
+      res.warnings.forEach(function (w) {
+        wc.appendChild(h('div', { class: 'warn' + (w.level === 'high' ? ' high' : '') }, [
+          h('span', { class: 'ic', text: w.level === 'high' ? '!' : '·' }),
+          h('span', { text: w.text })
+        ]));
+      });
+      root.appendChild(wc);
+    }
+
+    // 상대 대응
+    var bc = h('div', { class: 'card' }, [
+      h('h2', { text: '상대 대응 전략' }),
+      h('div', { class: 'desc', text: '왜 이런 전술이 나왔는지, 경기에서 무엇을 노리고 무엇을 조심해야 하는지입니다.' })
+    ]);
+    var brief = h('div', { class: 'brief' });
+    res.brief.key.forEach(function (b) { brief.appendChild(briefItem(b, true)); });
+    res.brief.normal.forEach(function (b) { brief.appendChild(briefItem(b, false)); });
+    if (!res.brief.key.length && !res.brief.normal.length) {
+      brief.appendChild(h('div', { class: 'small muted', text: '상대 정보를 더 넣으면 여기에 대응 항목이 쌓입니다. 「상대」 탭에서 성향을 골라 보세요.' }));
+    }
+    bc.appendChild(brief);
+    root.appendChild(bc);
+
+    // 선발과 역할
+    var lc = h('div', { class: 'card' }, [
+      h('h2', { text: '포지션별 역할과 임무' }),
+      h('div', { class: 'desc', text: '적합도는 그 선수가 그 역할의 강조 능력치를 얼마나 갖췄는지입니다. 역할이 다르면 숫자를 직접 비교하지 마세요 — 역할마다 보는 능력치 개수가 다릅니다.' })
+    ]);
+    var lu = h('div', { class: 'lineup' });
+    res.xi.lineup.forEach(function (l) {
+      var duty = l.duty === 'a' ? 'a' : (l.duty === 's' ? 's' : 'd');
+      var notes = [];
+      if (l.player && l.familiarity !== null && l.familiarity < 0.95) {
+        notes.push('등록 포지션이 아님(' + Math.round(l.familiarity * 100) + '% 적응)');
+      }
+      if (l.alternatives.length) {
+        notes.push('대안: ' + l.alternatives.map(function (a) {
+          return a.role.ko + '/' + RD.DUTIES[a.duty].ko;
+        }).join(', '));
+      }
+      lu.appendChild(h('div', { class: 'lu ' + duty }, [
+        h('div', { class: 'pos', text: posLabel(l.slot) }),
+        h('div', { class: 'mid' }, [
+          h('div', { class: 'role' }, [l.role.ko, h('em', { text: RD.DUTIES[l.duty].ko })]),
+          h('div', { class: 'who', text: l.player ? l.player.name : '— 배치할 선수 부족' }),
+          h('div', { class: 'note', text: l.role.note }),
+          notes.length ? h('div', { class: 'note', style: 'color:var(--dim2)', text: notes.join(' · ') }) : null
+        ]),
+        h('div', { class: 'fit' }, [
+          l.fit == null ? '—' : String(l.fit),
+          h('small', { text: '적합도' })
+        ])
+      ]));
+    });
+    lc.appendChild(lu);
+    root.appendChild(lc);
+
+    // 팀 지시
+    var ic = h('div', { class: 'card' }, [
+      h('h2', { text: '팀 지시' }),
+      h('div', { class: 'desc', text: '색이 들어온 항목만 기본값에서 바꾸면 됩니다. 각 줄을 누르면 왜 그렇게 정해졌는지 나옵니다.' })
+    ]);
+    ['core', 'ip', 'tr', 'ood'].forEach(function (g) {
+      var items = [];
+      Object.keys(res.instructions.axes).forEach(function (k) {
+        var a = res.instructions.axes[k];
+        if (a.group === g) items.push(axisRow(a));
+      });
+      Object.keys(res.instructions.toggles).forEach(function (k) {
+        var t = res.instructions.toggles[k];
+        if (t.group === g && (t.on || t.reasons.length)) items.push(toggleRow(t));
+      });
+      if (!items.length) return;
+      ic.appendChild(h('h3', { style: 'font-size:12px;color:var(--dim);margin:13px 0 6px', text: TD.GROUP_KO[g] }));
+      var box = h('div', { class: 'instr' });
+      items.forEach(function (i) { box.appendChild(i); });
+      ic.appendChild(box);
+    });
+    root.appendChild(ic);
+
+    // 개인 지시
+    var pc = h('div', { class: 'card' }, [
+      h('h2', { text: '개인 지시' }),
+      h('div', { class: 'desc', text: '선수 개인 능력치와 상대 특징에서 나온 항목만 적었습니다. 점선 표시는 역할이 자동으로 켜서 끌 수 없는 지시입니다.' })
+    ]);
+    if (!res.individual.length) {
+      pc.appendChild(h('div', { class: 'small muted', text: '따로 손댈 개인 지시가 없습니다 — 역할 기본값 그대로 두세요.' }));
+    }
+    res.individual.forEach(function (p) {
+      var ul = h('ul');
+      p.items.forEach(function (it) {
+        ul.appendChild(h('li', { class: it.locked ? 'lock' : '' }, [
+          h('b', { text: it.text }),
+          h('span', { class: 'r', text: it.why })
+        ]));
+      });
+      pc.appendChild(h('div', { class: 'pi' }, [
+        h('h4', {}, [
+          (p.player ? p.player.name : posLabel(p.slot)),
+          h('small', { text: p.role.ko + ' / ' + RD.DUTIES[p.duty].ko + ' · ' + posLabel(p.slot) })
+        ]),
+        ul
+      ]));
+    });
+    root.appendChild(pc);
+
+    // 포메이션 후보
+    var fc = h('div', { class: 'card' }, [
+      h('h2', { text: '다른 포메이션 후보' }),
+      h('div', { class: 'desc', text: '점수는 스쿼드 적합도 + 상대와의 형태 맞물림 + 전술 방향 적합도를 합한 값입니다. 눌러서 고정하면 그 포메이션으로 전술을 다시 만듭니다.' })
+    ]);
+    res.formationRanking.forEach(function (f) {
+      var notes = (f.notes || []).map(function (n) {
+        return (n.value > 0 ? '+' : '') + n.value + ' ' + n.text;
+      }).join(' · ');
+      fc.appendChild(h('button', {
+        class: 'fopt', 'aria-pressed': S.pinnedFormation === f.id ? 'true' : 'false',
+        onclick: function () {
+          S.pinnedFormation = S.pinnedFormation === f.id ? null : f.id;
+          save(); render(); window.scrollTo(0, 0);
+        }
+      }, [
+        h('div', { class: 'n' }, [
+          h('b', { text: f.ko }),
+          h('span', { text: notes || f.note })
+        ]),
+        h('div', { class: 'sc', text: String(f.total) })
+      ]));
+    });
+    var cur = FD.FORMATIONS.filter(function (f) { return f.id === res.xi.formation.id; })[0];
+    if (cur) {
+      fc.appendChild(h('h3', { style: 'font-size:12px;color:var(--dim);margin:14px 0 6px', text: cur.ko + ' — 이 형태의 성격' }));
+      fc.appendChild(h('div', { class: 'small muted', style: 'margin-bottom:8px', text: cur.note }));
+      fc.appendChild(h('div', { class: 'small' }, [
+        h('b', { style: 'color:var(--acc)', text: '강점 ' }),
+        cur.strength.join(' · ')
+      ]));
+      fc.appendChild(h('div', { class: 'small', style: 'margin-top:4px' }, [
+        h('b', { style: 'color:var(--warn)', text: '약점 ' }),
+        cur.weakness.join(' · ')
+      ]));
+    }
+    root.appendChild(fc);
+
+    // 데이터 신뢰도
+    var cov = Math.round(res.squad.coverage * 100);
+    root.appendChild(h('div', { class: 'card tight' }, [
+      h('div', { class: 'small muted' }, [
+        '능력치 입력률 ', h('b', { style: 'color:' + (cov >= 60 ? 'var(--acc)' : 'var(--warn)'), text: cov + '%' }),
+        ' · 선수 ' + res.squad.count + '명. ',
+        cov < 40
+          ? '입력이 적으면 비어 있는 능력치는 같은 그룹 평균으로 메워집니다 — 역할 추천이 실제 스쿼드보다 평평해집니다.'
+          : '선발 11명 기준 속도 ' + res.xiSquad.pace + ' · 기술 ' + res.xiSquad.technique +
+            ' · 제공권 ' + res.xiSquad.aerial + ' · 체력 ' + res.xiSquad.stamina + '.'
+      ])
+    ]));
+  };
+
+  function summaryCell(label, value, color) {
+    return h('div', {}, [
+      h('div', { class: 'tiny muted', text: label }),
+      h('div', { class: 'sv', style: color ? 'color:' + color : '', text: value })
+    ]);
+  }
+
+  function posLabel(slot) {
+    var p = RD.POSITIONS.filter(function (x) { return x.id === slot.pos; })[0];
+    return p ? p.ko : slot.pos;
+  }
+
+  function briefItem(b, key) {
+    return h('div', { class: 'bi' + (key ? ' key' : '') }, [
+      h('div', { class: 'g', text: b.group || '' }),
+      h('div', { class: 'w', text: b.why }),
+      b.action ? h('div', { class: 'a', text: b.action }) : null
+    ]);
+  }
+
+  function reasonList(reasons) {
+    if (!reasons.length) return h('div', { class: 'why' }, [h('div', { class: 'small muted', style: 'padding-top:9px', text: '이 항목을 움직인 근거가 없습니다 — FM 기본값 그대로 두세요.' })]);
+    var ul = h('ul');
+    reasons.forEach(function (r) {
+      ul.appendChild(h('li', {}, [
+        h('span', { class: 'dd', text: (r.delta > 0 ? '+' : '') + Math.round(r.delta * 10) / 10 + ' ' }),
+        r.why
+      ]));
+    });
+    return h('div', { class: 'why' }, [ul]);
+  }
+
+  function expandable(cls, keyText, valText, reasons) {
+    var why = reasonList(reasons);
+    why.style.display = 'none';
+    var caret = h('span', { class: 'caret', text: '▾' });
+    var box = h('div', { class: cls }, [
+      h('button', {
+        'aria-expanded': 'false',
+        onclick: function () {
+          var open = why.style.display === 'none';
+          why.style.display = open ? '' : 'none';
+          caret.textContent = open ? '▴' : '▾';
+          this.setAttribute('aria-expanded', open ? 'true' : 'false');
+        }
+      }, [
+        h('span', { class: 'k', text: keyText }),
+        h('span', { class: 'v', text: valText }),
+        caret
+      ]),
+      why
+    ]);
+    return box;
+  }
+
+  function axisRow(a) {
+    return expandable('ins' + (a.shifted ? '' : ' def'), a.ko, a.label, a.reasons);
+  }
+  function toggleRow(t) {
+    return expandable('ins' + (t.on ? ' on' : ' def'), t.ko, t.on ? '켜기' : '끄기', t.reasons);
+  }
+
+  // ── 경기 중 탭 ──────────────────────────────────────────────────────────
+  RENDER.match = function (root) {
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '경기 중 조정' }),
+      h('div', { class: 'desc', text: '상황이 바뀌면 전술도 바뀝니다. 아래는 상황별로 무엇을 어떤 순서로 건드릴지입니다.' })
+    ]));
+    TD.SCENARIOS.forEach(function (sc) {
+      var ol = h('ol');
+      sc.steps.forEach(function (s) { ol.appendChild(h('li', { text: s })); });
+      root.appendChild(h('details', { class: 'help' }, [
+        h('summary', { text: sc.ko }),
+        h('div', { class: 'body' }, [
+          h('div', { class: 'tiny muted', style: 'margin-bottom:4px', text: sc.when }),
+          ol
+        ])
+      ]));
+    });
+  };
+
+  // ── 안내 탭 ─────────────────────────────────────────────────────────────
+  RENDER.guide = function (root) {
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: 'FM24에서 스쿼드 내보내기' }),
+      h('div', { class: 'desc', text: '게임을 고치지 않고 FM에 이미 들어 있는 기능만 씁니다.' }),
+      h('div', { class: 'body', style: 'font-size:13px;color:var(--dim);line-height:1.75' }, [
+        h('ol', {}, [
+          h('li', {}, [h('strong', { text: '스쿼드 화면을 엽니다.' }), ' 팀 → 스쿼드']),
+          h('li', {}, [h('strong', { text: '보기를 능력치가 보이도록 바꿉니다.' }),
+            ' 화면 아래 보기 선택에서 능력치가 포함된 보기를 고르거나, 「보기 편집」으로 열을 직접 추가합니다. 이 도구는 열 이름을 한국어판·영문판 모두 인식합니다.']),
+          h('li', {}, [h('strong', { text: '내보냅니다.' }),
+            ' 화면 오른쪽 위 인쇄 아이콘(또는 ', h('code', { text: 'Ctrl+P' }), ') → ',
+            h('code', { text: '웹 페이지' }), ' 또는 ', h('code', { text: '텍스트 파일' }), '을 고릅니다.']),
+          h('li', {}, [h('strong', { text: '여기로 가져옵니다.' }),
+            ' 「스쿼드」 탭에서 그 파일을 선택하면 끝입니다.'])
+        ]),
+        h('p', {}, ['열이 많을수록 정확해집니다. 최소한 ', h('strong', { text: '이름 · 포지션' }),
+          '은 있어야 하고, 능력치가 없으면 역할 추천이 포지션만 보고 이루어집니다.'])
+      ])
+    ]));
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '「모드」로 만들 수 있는 것과 없는 것' }),
+      h('div', { class: 'body', style: 'font-size:13px;color:var(--dim);line-height:1.75' }, [
+        h('p', {}, ['FM24에는 스크립트를 실행하는 플러그인 구조가 없습니다. 스킨(XML)은 화면 배치와 색을 바꿀 뿐 계산을 하지 못하고, 에디터 파일은 데이터베이스를 고칠 뿐입니다. ',
+          h('strong', { text: '게임 안에서 전술을 계산해 조언하는 모드는 기술적으로 만들 수 없습니다.' })]),
+        h('p', {}, ['그래서 이 도구는 FM 옆에서 같이 켜 두는 방식입니다. 데이터는 FM이 공식적으로 제공하는 내보내기로 가져오므로 세이브 파일을 건드리지 않고, 게임 무결성에도 영향이 없습니다.']),
+        h('ul', {}, [
+          h('li', {}, [h('strong', { text: '가능' }), ' — 스킨/그래픽 교체, 데이터베이스 수정(에디터), 보기·필터 저장, 화면 내보내기']),
+          h('li', {}, [h('strong', { text: '불가능' }), ' — 게임 안에서 동작하는 계산 로직, 실시간 전술 조언 오버레이, 전술 파일(.fmf) 자동 생성'])
+        ])
+      ])
+    ]));
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '엔진이 답을 만드는 순서' }),
+      h('div', { class: 'body', style: 'font-size:13px;color:var(--dim);line-height:1.75' }, [
+        h('ol', {}, [
+          h('li', {}, ['상대 전술과 경기 상황에서 ', h('strong', { text: '규칙' }), '을 발동시킵니다. 각 규칙은 지시 축을 밀고 그 이유를 남깁니다.']),
+          h('li', {}, ['규칙이 준 점수로 ', h('strong', { text: '전술 방향' }), '(뒷공간 침투 · 점유 · 측면 · 역습 · 압박 · 블록 · 중앙 과부하)을 정합니다.']),
+          h('li', {}, ['포메이션 20종 각각에 대해 선발을 짜 보고, ', h('strong', { text: '스쿼드 적합도 · 상대와의 인원 맞물림 · 방향 적합도' }), '를 합해 순위를 냅니다.']),
+          h('li', {}, ['자리마다 역할과 임무를 고른 뒤 선수를 ', h('strong', { text: '전체 최적' }), '으로 배정합니다. 앞자리부터 좋은 선수를 가져가면 뒷자리의 유일한 적임자가 사라지기 때문입니다.']),
+          h('li', {}, ['팀으로 성립하지 않는 조합(수비 안 하는 역할 둘, 플레이메이커 셋, 양쪽 측면 동시 전진 …)에 감점을 주고 다시 맞춥니다.']),
+          h('li', {}, ['마지막으로 축을 FM 라벨로 바꾸고, 서로 배타적인 지시는 하나만 남깁니다.'])
+        ]),
+        h('p', {}, ['모든 지시 줄을 누르면 그 값이 나온 근거가 그대로 나옵니다. 동의하지 않는 근거가 있으면 그 항목만 FM에서 직접 바꾸면 됩니다 — 이 도구는 답을 주기보다 왜 그런지를 보여 주려고 만들었습니다.'])
+      ])
+    ]));
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '데이터' }),
+      h('div', { class: 'small muted' }, [
+        '역할 ' + RD.ROLES.length + '종 · 포메이션 ' + FD.FORMATIONS.length + '종 · 대응 규칙 ' + TD.RULES.length +
+        '개 · 상대 성향 ' + TD.OPP_TRAITS.length + '종. 모든 데이터는 이 기기 안에만 저장되고 어디로도 전송되지 않습니다.'
+      ]),
+      h('div', { class: 'row', style: 'margin-top:11px' }, [
+        h('button', { class: 'btn sm ghost', onclick: exportJson }, ['설정·스쿼드 내보내기(JSON)']),
+        (function () {
+          var input = h('input', {
+            type: 'file', accept: '.json', style: 'display:none',
+            onchange: function (ev) {
+              var f = ev.target.files && ev.target.files[0];
+              if (!f) return;
+              var fr = new FileReader();
+              fr.onload = function () {
+                try {
+                  var d = JSON.parse(String(fr.result));
+                  if (d.players) S.players = d.players;
+                  if (d.opponent) Object.assign(S.opponent, d.opponent);
+                  if (d.context) Object.assign(S.context, d.context);
+                  save(); render(); toast('불러왔습니다.');
+                } catch (e) { toast('파일을 읽지 못했습니다.'); }
+              };
+              fr.readAsText(f, 'utf-8');
+              ev.target.value = '';
+            }
+          });
+          return h('span', {}, [input, h('button', { class: 'btn sm ghost', onclick: function () { input.click(); } }, ['불러오기'])]);
+        })()
+      ])
+    ]));
+  };
+
+  function exportJson() {
+    var blob = new Blob([JSON.stringify({
+      players: S.players, opponent: S.opponent, context: S.context
+    }, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fm24-tactics.json';
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  // ── 전술 텍스트 복사 ────────────────────────────────────────────────────
+  function copyPlan(res) {
+    var L = [];
+    L.push('■ FM24 전술 — ' + res.xi.formation.ko + ' / ' + res.plans.top.map(function (p) { return p.ko; }).join(' + '));
+    L.push('상대: ' + (res.opponentFormation ? res.opponentFormation.ko : '모름'));
+    L.push('');
+    L.push('[선발과 역할]');
+    res.xi.lineup.forEach(function (l) {
+      L.push('  ' + posLabel(l.slot).padEnd(6) + ' ' + l.role.ko + ' / ' + RD.DUTIES[l.duty].ko +
+        '  —  ' + (l.player ? l.player.name : '(미배정)') + (l.fit != null ? ' (' + l.fit + ')' : ''));
+    });
+    L.push('');
+    L.push('[팀 지시]');
+    ['core', 'ip', 'tr', 'ood'].forEach(function (g) {
+      var rows = [];
+      Object.keys(res.instructions.axes).forEach(function (k) {
+        var a = res.instructions.axes[k];
+        if (a.group === g && a.shifted) rows.push('  ' + a.ko + ': ' + a.label);
+      });
+      Object.keys(res.instructions.toggles).forEach(function (k) {
+        var t = res.instructions.toggles[k];
+        if (t.group === g && t.on) rows.push('  ' + t.ko + ': 켜기');
+      });
+      if (rows.length) { L.push(' <' + TD.GROUP_KO[g] + '>'); rows.forEach(function (r) { L.push(r); }); }
+    });
+    if (res.individual.length) {
+      L.push('');
+      L.push('[개인 지시]');
+      res.individual.forEach(function (p) {
+        L.push('  ' + (p.player ? p.player.name : posLabel(p.slot)) + ' (' + p.role.ko + '/' + RD.DUTIES[p.duty].ko + ')');
+        p.items.forEach(function (it) { L.push('    - ' + it.text + (it.locked ? ' (역할 고정)' : '')); });
+      });
+    }
+    var brief = res.brief.key.concat(res.brief.normal);
+    if (brief.length) {
+      L.push('');
+      L.push('[상대 대응]');
+      brief.forEach(function (b) { L.push('  · ' + b.why + (b.action ? '\n      → ' + b.action : '')); });
+    }
+    if (res.warnings.length) {
+      L.push('');
+      L.push('[점검할 점]');
+      res.warnings.forEach(function (w) { L.push('  ! ' + w.text); });
+    }
+    var text = L.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast('전술을 복사했습니다.'); },
+        function () { fallbackCopy(text); });
+    } else fallbackCopy(text);
+  }
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('전술을 복사했습니다.'); }
+    catch (e) { toast('복사하지 못했습니다.'); }
+    document.body.removeChild(ta);
+  }
+
+  // ── 예시 스쿼드 ─────────────────────────────────────────────────────────
+  function loadDemo() {
+    if (S.players.length && !confirm('지금 스쿼드에 예시 선수를 추가합니다. 계속할까요?')) return;
+    S.players = S.players.concat(demoSquad());
+    save(); render(); toast('예시 스쿼드를 넣었습니다.');
+  }
+
+  function demoSquad() {
+    function mk(name, positions, foot, base, over) {
+      var attrs = {};
+      RD.ATTR_ORDER.forEach(function (id) { attrs[id] = base; });
+      Object.keys(over).forEach(function (k) { attrs[k] = over[k]; });
+      return { id: 'demo_' + name, name: name, positions: positions, foot: foot, attrs: attrs };
+    }
+    return [
+      mk('예시 골키퍼', ['GK'], 'R', 11, { ref: 15, han: 14, cmd: 13, com: 13, kic: 13, ono: 14, tro: 13, aer: 14, cnt: 14, pos: 14, agi: 14 }),
+      mk('예시 백업GK', ['GK'], 'R', 10, { ref: 12, han: 12, cmd: 11, ono: 11, aer: 12 }),
+      mk('예시 센터백A', ['DC'], 'R', 11, { mar: 16, tck: 16, hea: 15, pos: 15, jum: 15, str: 16, cnt: 14, dec: 13, bra: 14, pas: 11, ldr: 14 }),
+      mk('예시 센터백B', ['DC'], 'L', 11, { mar: 14, tck: 14, hea: 13, pos: 14, pac: 15, acc: 14, ant: 15, pas: 14, tec: 13, cmp: 14, dec: 14 }),
+      mk('예시 센터백C', ['DC', 'DM'], 'R', 10, { mar: 13, tck: 13, hea: 14, str: 14, jum: 14, pos: 13, cnt: 12 }),
+      mk('예시 오른풀백', ['DR', 'WBR'], 'R', 11, { cro: 14, tck: 13, mar: 13, sta: 16, wor: 15, pac: 15, acc: 15, otb: 13, tea: 14, ant: 13, dri: 13 }),
+      mk('예시 왼풀백', ['DL', 'WBL'], 'L', 11, { cro: 13, tck: 14, mar: 14, sta: 15, wor: 14, pac: 13, acc: 13, pos: 14, cnt: 13, dec: 13 }),
+      mk('예시 수미A', ['DM', 'MC'], 'R', 11, { tck: 15, mar: 14, pos: 16, ant: 15, cnt: 14, tea: 15, wor: 15, cmp: 13, dec: 14, str: 13, agg: 13 }),
+      mk('예시 수미B', ['DM', 'MC'], 'R', 11, { pas: 16, fir: 15, tec: 15, vis: 16, dec: 15, cmp: 15, tea: 14, ant: 13, pos: 13 }),
+      mk('예시 중미A', ['MC'], 'R', 11, { pas: 14, fir: 14, tck: 13, otb: 14, wor: 16, sta: 16, str: 13, ant: 13, dec: 13, lon: 13 }),
+      mk('예시 중미B', ['MC', 'AMC'], 'L', 11, { pas: 15, fir: 15, tec: 16, vis: 15, dri: 14, fla: 15, dec: 14, cmp: 14, agi: 15, otb: 13 }),
+      mk('예시 공미', ['AMC'], 'R', 11, { pas: 14, fir: 15, tec: 15, otb: 16, ant: 15, fin: 14, dri: 14, acc: 15, agi: 15, bal: 14, cmp: 14 }),
+      mk('예시 오른윙', ['AMR', 'MR'], 'R', 11, { cro: 15, dri: 16, tec: 15, otb: 14, acc: 16, pac: 16, agi: 15, bal: 14, wor: 13, ant: 13, fla: 14 }),
+      mk('예시 왼윙', ['AML', 'ML'], 'R', 11, { dri: 16, fin: 15, tec: 15, otb: 15, ant: 14, acc: 16, pac: 16, agi: 16, bal: 15, cmp: 14, fla: 14 }),
+      mk('예시 왼측미', ['AML', 'ML'], 'L', 10, { cro: 14, dri: 13, wor: 15, sta: 15, tck: 12, mar: 12, tea: 13, pos: 12 }),
+      mk('예시 공격수A', ['ST'], 'R', 11, { fin: 17, otb: 16, ant: 16, cmp: 15, dri: 14, fir: 14, acc: 16, pac: 16, tec: 14, dec: 14 }),
+      mk('예시 공격수B', ['ST'], 'R', 11, { hea: 17, str: 17, jum: 17, bra: 15, fin: 14, otb: 13, tea: 14, wor: 14, bal: 14, fir: 13, agg: 13 }),
+      mk('예시 유틸', ['MC', 'DM', 'DC'], 'R', 10, { tck: 13, pas: 12, wor: 14, sta: 14, tea: 13, pos: 12 }),
+      mk('예시 측면백업', ['MR', 'AMR', 'WBR'], 'R', 10, { cro: 13, sta: 15, wor: 14, tck: 12, pac: 14, acc: 14 })
+    ];
+  }
+
+  // ── 서비스 워커 ─────────────────────────────────────────────────────────
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () { /* 오프라인 캐시는 없어도 동작합니다 */ });
+    });
+  }
+
+  load();
+  render();
+})();
+</script>
+</body>
+</html>

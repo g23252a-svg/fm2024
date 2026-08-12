@@ -1,0 +1,12 @@
+{
+  "name": "fm2024-tactics",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Football Manager 2024 custom tactics generator — squad-aware roles, duties, team and player instructions, and opponent counter-plans",
+  "scripts": {
+    "test": "node tests/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
