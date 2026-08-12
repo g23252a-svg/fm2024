@@ -91,6 +91,7 @@ section[hidden]{display:none}
 .btn.pri:hover{background:#6ee7a0;border-color:#6ee7a0}
 .btn.ghost{background:transparent}
 .btn.sm{padding:5px 10px;font-size:12.5px;border-radius:7px}
+#overlayToggle{white-space:nowrap;flex:0 0 auto}
 .btn.danger{color:var(--danger);border-color:#4a2530}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 
@@ -1299,6 +1300,38 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ])
     ]));
 
+    // FM 화면에 옮기는 순서 — 세이브를 막 시작해 전술이 비어 있을 때 무엇부터
+    // 누르면 되는지가 첫 관문입니다.
+    var topPlan = res.plans.top[0];
+    var preset = TD.FM_PRESETS[topPlan.id];
+    var shifted = Object.keys(res.instructions.axes).filter(function (k) { return res.instructions.axes[k].shifted; }).length;
+    var onCount = Object.keys(res.instructions.toggles).filter(function (k) { return res.instructions.toggles[k].on; }).length;
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: 'FM에 옮기는 순서' }),
+      h('div', { class: 'desc', text: '전술 → 기본 정보 화면에서 이 순서대로 하면 됩니다.' }),
+      (function () {
+        var ol = h('ol', { style: 'margin:0;padding-left:19px;font-size:13px;line-height:1.85;color:var(--dim)' });
+        ol.appendChild(h('li', {}, [
+          '전술 유형을 고릅니다 — ',
+          h('b', { style: 'color:var(--acc)', text: preset ? preset.ko : TD.FM_PRESET_BLANK }),
+          preset && preset.alt ? h('span', { class: 'tiny muted', text: ' (또는 ' + preset.alt + ')' }) : null,
+          h('span', { class: 'tiny muted', text: '  · 프리셋은 역할과 지시를 자기 값으로 채우니 아래와 다른 부분은 덮어쓰세요. 어긋나는 게 싫으면 「' + TD.FM_PRESET_BLANK + '」으로 백지에서 시작하면 됩니다.' })
+        ]));
+        ol.appendChild(h('li', {}, ['포메이션을 ', h('b', { style: 'color:var(--text)', text: res.xi.formation.ko }),
+          ro(res.xi.formation.ko) + ' 바꿉니다.']));
+        ol.appendChild(h('li', {}, ['멘탈리티를 ', h('b', { style: 'color:var(--text)', text: res.instructions.axes.mentality.label }),
+          ro(res.instructions.axes.mentality.label) + ' 둡니다.']));
+        ol.appendChild(h('li', {}, ['자리마다 역할과 임무를 지정합니다 (아래 ',
+          h('b', { style: 'color:var(--text)', text: '포지션별 역할과 임무' }), ' 11줄).']));
+        ol.appendChild(h('li', {}, ['팀 지시를 맞춥니다 — 바꿀 것은 ',
+          h('b', { style: 'color:var(--text)', text: '축 ' + Math.max(0, shifted - 1) + '개 · 켤 지시 ' + onCount + '개' }), '뿐입니다.']));
+        if (res.individual.length) {
+          ol.appendChild(h('li', {}, ['개인 지시를 넣습니다 (', h('b', { style: 'color:var(--text)', text: res.individual.length + '명' }), ').']));
+        }
+        return ol;
+      })()
+    ]));
+
     // 포지션이 비어 있으면 아래 결과 전체를 믿을 수 없으므로 맨 위에서 말합니다.
     var noPos = res.xi.lineup.filter(function (l) {
       return l.player && !(l.player.positions || []).length;
@@ -1527,6 +1560,47 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     el.addEventListener('drop', function (e) {
       if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) onFiles(e.dataTransfer.files);
     });
+  }
+
+  /*
+   * 한글 조사 고르기.
+   *
+   * 포메이션·지시 이름을 문장에 그대로 끼우면 "크리스마스 트리으로"처럼 나옵니다.
+   * 받침 유무로 갈리는데, 이름 끝이 숫자나 로마자인 경우가 많아
+   * (4-4-2 · 5-3-2 WB · 4-1-4-1 DM) 그것들의 한글 읽기까지 봅니다.
+   */
+  var DIGIT_JONG = { '0': 'ㅇ', '1': 'ㄹ', '2': '', '3': 'ㅁ', '4': '', '5': '', '6': 'ㄱ', '7': 'ㄹ', '8': 'ㄹ', '9': '' };
+  var LATIN_JONG = {
+    A: '', B: '', C: '', D: '', E: '', F: 'ㅍ', G: '', H: 'ㅣ', I: '', J: '', K: '', L: 'ㄹ',
+    M: 'ㅁ', N: 'ㄴ', O: '', P: '', Q: '', R: 'ㄹ', S: 'ㅅ', T: '', U: '', V: '', W: 'ㅜ', X: 'ㅅ', Y: '', Z: ''
+  };
+  function finalConsonant(word) {
+    var s = String(word == null ? '' : word).trim();
+    // 괄호·공백을 걷어내고 마지막 의미 있는 글자를 봅니다.
+    s = s.replace(/[)\]\s]+$/, '');
+    if (!s) return null;
+    var c = s.charAt(s.length - 1);
+    var code = c.charCodeAt(0);
+    if (code >= 0xAC00 && code <= 0xD7A3) {
+      var jong = (code - 0xAC00) % 28;
+      return jong === 0 ? '' : (jong === 8 ? 'ㄹ' : 'X');
+    }
+    if (DIGIT_JONG[c] !== undefined) return DIGIT_JONG[c] || '';
+    var upper = c.toUpperCase();
+    if (LATIN_JONG[upper] !== undefined) return LATIN_JONG[upper] === 'ㄹ' ? 'ㄹ' : (LATIN_JONG[upper] ? 'X' : '');
+    return null;
+  }
+  // '로/으로' — 받침이 없거나 ㄹ이면 '로'.
+  function ro(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '으로';
+    return (f === '' || f === 'ㄹ') ? '로' : '으로';
+  }
+  // '을/를' — 받침이 있으면 '을'.
+  function eul(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '을';
+    return f === '' ? '를' : '을';
   }
 
   function quickCount(p) {

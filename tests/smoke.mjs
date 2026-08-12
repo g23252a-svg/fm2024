@@ -164,8 +164,55 @@ for (const [pid, plan] of Object.entries(TD.PLANS)) {
     assert.ok(ALL_TAGS.has(tag), `플랜 ${pid}가 아무 역할도 갖지 않은 태그 '${tag}'를 참조한다`);
   }
 }
+// 모든 전술 방향에 대응하는 FM 전술 유형이 있어야 한다 — 없으면 세이브를 막
+// 시작한 사람이 "전술 유형을 고르십시오" 화면에서 무엇을 누를지 알 수 없다.
+for (const pid of PLAN_IDS) {
+  const preset = TD.FM_PRESETS[pid];
+  assert.ok(preset && preset.ko, `전술 방향 ${pid}에 대응하는 FM 전술 유형이 없다`);
+}
+for (const pid of Object.keys(TD.FM_PRESETS)) {
+  assert.ok(PLAN_IDS.has(pid), `FM 전술 유형이 없는 전술 방향 ${pid}을 가리킨다`);
+}
+assert.ok(TD.FM_PRESET_BLANK, '백지에서 시작하는 항목 이름이 없다');
+
 assert.ok(TD.SCENARIOS.length >= 5, '경기 중 시나리오가 너무 적다');
 for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${sc.id}의 단계가 부족하다`);
+
+// ── 한글 조사 ─────────────────────────────────────────────────────────────
+// 포메이션 이름을 문장에 그대로 끼우면 "크리스마스 트리으로"가 된다.
+// 이름 끝이 숫자나 로마자인 경우가 많아(4-4-2 · 5-3-2 WB · 4-1-4-1 DM) 같이 본다.
+{
+  const src = inline[0];
+  const sandbox = { window: {}, document: undefined };
+  // index.html의 조사 함수만 떼어 내 확인한다 (전체를 실행하면 DOM이 필요하다)
+  const roSrc = src.slice(src.indexOf('var DIGIT_JONG'), src.indexOf('function quickCount'));
+  const ro = new Function(roSrc + '\nreturn { ro: ro, eul: eul };')();
+  const cases = [
+    ['4-3-2-1 크리스마스 트리', '로'],
+    ['4-2-3-1 와이드', '로'],      // '드'는 받침이 없다
+    ['4-4-2 다이아몬드', '로'],
+    ['4-4-2', '로'],          // 이(二) — 받침 없음
+    ['4-1-4-1 DM', '으로'],   // 엠 — ㅁ 받침
+    ['5-3-2 WB', '로'],       // 비 — 받침 없음
+    ['5-4-1 WB', '로'],
+    ['균형', '으로'],
+    ['긍정적', '으로'],
+    ['4-3-3', '으로']         // 삼 — ㅁ 받침
+  ];
+  for (const [word, want] of cases) {
+    assert.equal(ro.ro(word), want, `'${word}' 뒤의 조사가 '${ro.ro(word)}'로 나왔다 (기대: ${want})`);
+  }
+  assert.equal(ro.eul('트리'), '를');
+  assert.equal(ro.eul('와이드'), '를');
+  assert.equal(ro.eul('균형'), '을');
+
+  // 실제 포메이션 이름 전부에 대해 조사가 나와야 한다 (null/undefined 금지)
+  for (const f of FD.FORMATIONS) {
+    const j = ro.ro(f.ko);
+    assert.ok(j === '로' || j === '으로', `${f.ko}의 조사가 이상하다: ${j}`);
+  }
+  void sandbox;
+}
 
 // ── 헝가리안 알고리즘 ─────────────────────────────────────────────────────
 {

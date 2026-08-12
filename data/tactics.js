@@ -147,6 +147,28 @@
     }
   };
 
+  /*
+   * FM 전술 유형(프리셋)과의 대응.
+   *
+   * 세이브를 처음 시작하면 「전술 → 기본 정보」에 전술 유형 목록만 뜨고 포메이션이
+   * 비어 있습니다. 그 화면에서 무엇을 누를지가 첫 관문이라, 우리 전술 방향에 가장
+   * 가까운 유형을 함께 알려 줍니다.
+   *
+   * 다만 프리셋은 역할·임무·지시를 자기 값으로 한 번에 채웁니다. 이 도구가 낸
+   * 값과 다른 부분은 프리셋을 고른 뒤 덮어써야 합니다. 그게 번거로우면
+   * 「자신만의 전술 유형 생성」으로 백지에서 시작하는 편이 어긋날 일이 없습니다.
+   */
+  var FM_PRESETS = {
+    possession: { ko: '점유율 중시', alt: '티키타카' },
+    'press-high': { ko: '게겐프레스', alt: '전진 티키타카' },
+    'wide-cross': { ko: '측면 플레이', alt: null },
+    counter: { ko: '빠른 역습', alt: '유연한 역습' },
+    'in-behind': { ko: '유연한 역습', alt: '길게 차기' },
+    'low-block': { ko: '카테나치오', alt: '버스 세우기' },
+    'overload-centre': { ko: '전진 티키타카', alt: '티키타카' }
+  };
+  var FM_PRESET_BLANK = '자신만의 전술 유형 생성';
+
   // ── 상대 성향 태그 ────────────────────────────────────────────────────
   var OPP_TRAITS = [
     { id: 'fast-striker', ko: '빠른 공격수', hint: '뒷공간으로 달리는 공격수가 있다' },
@@ -601,6 +623,8 @@
     TOGGLES: TOGGLES,
     GROUP_KO: GROUP_KO,
     PLANS: PLANS,
+    FM_PRESETS: FM_PRESETS,
+    FM_PRESET_BLANK: FM_PRESET_BLANK,
     OPP_TRAITS: OPP_TRAITS,
     RULES: RULES,
     SCENARIOS: SCENARIOS
