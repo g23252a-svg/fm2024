@@ -303,6 +303,35 @@ details.help .body strong{color:var(--text)}
 
 .sticky-actions{position:sticky;bottom:0;background:linear-gradient(180deg,rgba(10,14,20,0),rgba(10,14,20,.96) 34%);
   padding:14px 0 calc(10px + env(safe-area-inset-bottom,0px));margin-top:4px;z-index:20}
+
+/* ── 오버레이 모드 ──
+   FM 창 위에 항상 띄워 두고 곁눈질하는 용도. 화면을 좁게 쓰므로 설명을 걷어내고
+   경기 중에 실제로 눈이 가는 것(선발·바꿀 지시·핵심 대응)만 남깁니다. */
+body.overlay{font-size:13px}
+body.overlay .top{padding:7px 10px}
+body.overlay .top .brand{margin-bottom:0}
+body.overlay .top .brand svg{width:18px;height:18px}
+body.overlay .top h1{font-size:12.5px}
+body.overlay .top .sub,body.overlay nav.tabs{display:none}
+body.overlay main{padding:8px}
+body.overlay .card{padding:9px 10px;margin-bottom:7px;border-radius:9px}
+body.overlay .card > h2{font-size:12px;margin-bottom:6px}
+.ov{display:flex;flex-direction:column;gap:2px}
+.ov .r{display:flex;gap:7px;align-items:baseline;padding:2px 0;border-bottom:1px solid rgba(38,50,74,.5)}
+.ov .r:last-child{border-bottom:0}
+.ov .r .p{flex:0 0 40px;font-size:10px;font-weight:800;color:var(--dim2)}
+.ov .r .rr{flex:1 1 auto;font-size:12px;font-weight:700;min-width:0}
+.ov .r .rr em{font-style:normal;font-size:10.5px;margin-left:4px}
+.ov .r.d .rr em{color:var(--duty-d)} .ov .r.s .rr em{color:var(--duty-s)} .ov .r.a .rr em{color:var(--duty-a)}
+.ov .r .nn{flex:0 0 auto;max-width:44%;font-size:11px;color:var(--dim);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ovi{display:flex;flex-wrap:wrap;gap:4px}
+.ovi span{background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+  padding:2px 7px;font-size:11.5px;font-weight:600}
+.ovi span b{color:var(--acc2);font-weight:800;margin-left:4px}
+.ovi span.on{border-color:#2c4a35;color:var(--acc)}
+.ovb{font-size:11.5px;color:var(--dim);line-height:1.55;margin-bottom:5px}
+.ovb b{color:var(--text);display:block;font-size:12px}
 </style>
 </head>
 <body>
@@ -311,10 +340,11 @@ details.help .body strong{color:var(--text)}
 <header class="top">
   <div class="brand">
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="#4ade80" stroke-width="1.6"/><path d="M12 6.6l3.4 2.5-1.3 4h-4.2l-1.3-4z" fill="#4ade80"/><path d="M12 2.4v4.2M4.1 9.1l4 2.9M19.9 9.1l-4 2.9M7.4 20.4l2.5-7.3M16.6 20.4l-2.5-7.3" stroke="#4ade80" stroke-width="1.2" fill="none"/></svg>
-    <div>
+    <div class="grow">
       <h1>FM24 맞춤형 전술 생성기</h1>
       <div class="sub">스쿼드 · 상대 전술 → 포메이션 · 역할 · 팀 지시 · 개인 지시</div>
     </div>
+    <button class="btn sm ghost" id="overlayToggle" title="FM 창 위에 겹쳐 두는 좁은 보기">겹쳐 보기</button>
   </div>
   <nav class="tabs" id="tabs" aria-label="화면 전환"></nav>
 </header>
@@ -352,7 +382,8 @@ details.help .body strong{color:var(--text)}
     context: { venue: 'home', odds: 'even', goal: 'win' },
     pinnedFormation: null,
     tab: 'squad',
-    editing: null
+    editing: null,
+    overlay: false
   };
 
   function save() {
@@ -426,12 +457,102 @@ details.help .body strong{color:var(--text)}
   }
 
   function render() {
+    document.body.classList.toggle('overlay', !!S.overlay);
+    var toggle = document.getElementById('overlayToggle');
+    if (toggle) {
+      toggle.textContent = S.overlay ? '전체 보기' : '겹쳐 보기';
+      toggle.setAttribute('aria-pressed', S.overlay ? 'true' : 'false');
+    }
+    if (S.overlay) {
+      TABS.forEach(function (t) {
+        var sec = document.getElementById('tab-' + t.id);
+        sec.hidden = t.id !== 'result';
+      });
+      var box = clear(document.getElementById('tab-result'));
+      renderOverlay(box);
+      return;
+    }
     renderTabs();
     TABS.forEach(function (t) {
       var sec = document.getElementById('tab-' + t.id);
       sec.hidden = S.tab !== t.id;
       if (S.tab === t.id) { clear(sec); RENDER[t.id](sec); }
     });
+  }
+
+  /*
+   * 겹쳐 보기 — FM 창 위에 항상 띄워 두는 좁은 보기.
+   * 게임 안에 넣을 방법이 없으니(README 참고) 화면 위에 겹치는 것이 가장 가깝습니다.
+   * 경기 중에 실제로 다시 보는 것만 남기고 설명은 전부 걷어냅니다.
+   */
+  function renderOverlay(root) {
+    if (!S.players.length) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'small muted', text: '스쿼드가 비어 있습니다. 전체 보기로 돌아가 선수를 넣어 주세요.' })
+      ]));
+      return;
+    }
+    var res;
+    try {
+      res = E.generate({
+        players: S.players, opponent: S.opponent, context: S.context,
+        allowedFormations: S.pinnedFormation ? [S.pinnedFormation] : null
+      });
+    } catch (err) {
+      root.appendChild(h('div', { class: 'card' }, [h('div', { class: 'rep err', text: '오류: ' + (err && err.message) })]));
+      return;
+    }
+    lastResult = res;
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { style: 'font-size:14px;font-weight:800' }, [
+        res.xi.formation.ko,
+        h('span', { style: 'color:var(--acc);margin-left:8px', text: res.plans.top.map(function (p) { return p.ko; }).join('+') }),
+        h('span', { style: 'color:var(--acc2);margin-left:8px', text: res.instructions.axes.mentality.label })
+      ]),
+      h('div', { class: 'tiny muted', text: '상대 ' + (res.opponentFormation ? res.opponentFormation.ko : '모름') })
+    ]));
+
+    var ov = h('div', { class: 'ov' });
+    res.xi.lineup.forEach(function (l) {
+      var duty = l.duty === 'a' ? 'a' : (l.duty === 's' ? 's' : 'd');
+      ov.appendChild(h('div', { class: 'r ' + duty }, [
+        h('span', { class: 'p', text: posLabel(l.slot) }),
+        h('span', { class: 'rr' }, [l.role.ko, h('em', { text: RD.DUTIES[l.duty].abbr })]),
+        h('span', { class: 'nn', text: l.player ? l.player.name : '—' })
+      ]));
+    });
+    root.appendChild(h('div', { class: 'card' }, [h('h2', { text: '선발' }), ov]));
+
+    var chips = h('div', { class: 'ovi' });
+    Object.keys(res.instructions.axes).forEach(function (k) {
+      var a = res.instructions.axes[k];
+      if (a.shifted) chips.appendChild(h('span', {}, [a.ko, h('b', { text: a.label })]));
+    });
+    Object.keys(res.instructions.toggles).forEach(function (k) {
+      var t = res.instructions.toggles[k];
+      if (t.on) chips.appendChild(h('span', { class: 'on', text: t.ko }));
+    });
+    if (!chips.childNodes.length) chips.appendChild(h('span', { text: '기본값 그대로' }));
+    root.appendChild(h('div', { class: 'card' }, [h('h2', { text: '바꿀 지시' }), chips]));
+
+    if (res.brief.key.length) {
+      var bc = h('div', { class: 'card' }, [h('h2', { text: '핵심 대응' })]);
+      res.brief.key.forEach(function (b) {
+        bc.appendChild(h('div', { class: 'ovb' }, [h('b', { text: b.why }), b.action || '']));
+      });
+      root.appendChild(bc);
+    }
+    if (res.warnings.length) {
+      var wc = h('div', { class: 'card' }, [h('h2', { text: '점검' })]);
+      res.warnings.slice(0, 4).forEach(function (w) {
+        wc.appendChild(h('div', { class: 'ovb', text: (w.level === 'high' ? '! ' : '· ') + w.text }));
+      });
+      root.appendChild(wc);
+    }
+    root.appendChild(h('div', { class: 'card' }, [
+      h('button', { class: 'btn sm', style: 'width:100%', onclick: function () { copyPlan(res); } }, ['전술 복사'])
+    ]));
   }
 
   // ── 피치 그리기 ─────────────────────────────────────────────────────────
@@ -1328,6 +1449,14 @@ details.help .body strong{color:var(--text)}
   }
 
   load();
+  // 겹쳐 보기는 실행 방식으로 결정되는 값이라 저장하지 않고 주소에서만 읽습니다.
+  // (?overlay=1 로 바로 띄우는 바로가기를 만들어 두는 용도)
+  if (/[?&]overlay=1/.test(location.search)) S.overlay = true;
+  document.getElementById('overlayToggle').addEventListener('click', function () {
+    S.overlay = !S.overlay;
+    render();
+    window.scrollTo(0, 0);
+  });
   render();
 })();
 </script>
