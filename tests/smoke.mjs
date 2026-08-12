@@ -247,6 +247,44 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   assert.ok(withJunk.report.unknownColumns.includes('Transfer Value'), '인식 못한 열을 보고하지 않았다');
 }
 
+// ── 두 번에 나눠 내보낸 스쿼드를 합치기 ───────────────────────────────────
+// 열이 많아 화면이 좁으면 기술·정신 / 신체·GK로 나눠 두 번 내보내게 된다.
+// 이때 두 번째 가져오기가 첫 번째 능력치를 지우면 안 된다.
+{
+  const passA = IMP.parseSquad('Name\tPosition\tPas\tTec\tVis\n김선수\tM (C)\t15\t14\t16');
+  const passB = IMP.parseSquad('Name\tPosition\tPac\tSta\tStr\n김선수\tM (C)\t12\t17\t13');
+  assert.equal(passA.players.length, 1);
+  assert.equal(passB.players.length, 1);
+
+  const first = IMP.mergeSquad([], passA.players);
+  assert.equal(first.added, 1);
+  const second = IMP.mergeSquad(first.players, passB.players);
+  assert.equal(second.added, 0, '같은 이름인데 새 선수로 추가됐다');
+  assert.equal(second.updated, 1);
+  assert.equal(second.filled, 3, `채운 능력치 수가 3이 아니라 ${second.filled}`);
+
+  const merged = second.players[0];
+  assert.equal(second.players.length, 1, '같은 선수가 둘로 늘었다');
+  assert.equal(merged.attrs.pas, 15, '첫 번째 가져오기의 능력치가 지워졌다');
+  assert.equal(merged.attrs.tec, 14, '첫 번째 가져오기의 능력치가 지워졌다');
+  assert.equal(merged.attrs.vis, 16, '첫 번째 가져오기의 능력치가 지워졌다');
+  assert.equal(merged.attrs.sta, 17, '두 번째 가져오기의 능력치가 안 들어왔다');
+  assert.equal(merged.attrCount, 6, `합친 능력치 수가 6이 아니라 ${merged.attrCount}`);
+
+  // 원본 배열을 건드리면 안 된다
+  assert.equal(first.players[0].attrs.sta, undefined, 'mergeSquad가 입력 배열을 변경했다');
+
+  // 포지션이 비어 있는 쪽이 이미 있는 포지션을 지우면 안 된다
+  const noPos = IMP.mergeSquad(second.players, [{ name: '김선수', positions: [], attrs: { fin: 11 } }]);
+  assert.deepEqual([...noPos.players[0].positions], ['MC'], '빈 포지션이 기존 포지션을 지웠다');
+  assert.equal(noPos.players[0].attrs.pas, 15, '병합에서 기존 능력치가 사라졌다');
+
+  // 새 값은 기존 값을 덮어쓴다 (최신 내보내기가 이긴다)
+  const bumped = IMP.mergeSquad(second.players, [{ name: '김선수', positions: ['MC'], attrs: { pas: 17 } }]);
+  assert.equal(bumped.players[0].attrs.pas, 17, '새로 가져온 값이 반영되지 않았다');
+  assert.equal(bumped.filled, 0, '이미 있던 값을 새로 채운 것으로 셌다');
+}
+
 // ── 테스트용 스쿼드 ───────────────────────────────────────────────────────
 function mkPlayer(name, positions, profile, foot = 'R') {
   const attrs = {};

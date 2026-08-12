@@ -383,7 +383,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     pinnedFormation: null,
     tab: 'squad',
     editing: null,
-    overlay: false
+    overlay: false,
+    importReport: null
   };
 
   function save() {
@@ -598,12 +599,40 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   // ── 스쿼드 탭 ───────────────────────────────────────────────────────────
   var RENDER = {};
 
+  function importReportBox() {
+    var ir = S.importReport;
+    if (!ir) return h('div');
+    var r = ir.report;
+    if (!ir.ok) {
+      return h('div', { class: 'rep err' }, [
+        h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }), r.error || '선수를 하나도 읽지 못했습니다.']),
+        h('div', { class: 'tiny muted', style: 'margin-top:6px',
+          text: '읽은 형식: ' + r.format + ' · 표 행 수: ' + (r.rows || 0) })
+      ]);
+    }
+    var m = ir.merged;
+    var lines = [
+      h('div', {}, [
+        h('b', { text: m.added + '명 추가' }),
+        m.updated ? (' · 기존 ' + m.updated + '명에 능력치 ' + m.filled + '개 채움') : '',
+        ' · 능력치 열 ' + r.attrColumns + '개 인식'
+      ])
+    ];
+    if (r.noPosition) lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + r.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
+    if (r.noAttrs) lines.push(h('div', { class: 'tiny muted', text: '능력치가 하나도 없는 선수 ' + r.noAttrs + '명.' }));
+    if (!r.attrColumns) lines.push(h('div', { class: 'tiny muted', text: '능력치 열이 하나도 없습니다 — 보기에 능력치 열을 추가한 뒤 다시 내보내세요. 「안내」 탭에 방법이 있습니다.' }));
+    if (r.unknownColumns && r.unknownColumns.length) {
+      lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' + r.unknownColumns.slice(0, 12).join(', ') + (r.unknownColumns.length > 12 ? ' 외 ' + (r.unknownColumns.length - 12) + '개' : '') }));
+    }
+    return h('div', { class: 'rep' }, lines);
+  }
+
   RENDER.squad = function (root) {
     // 가져오기
-    var ta, repBox;
+    var ta;
     var card = h('div', { class: 'card' }, [
       h('h2', { text: '스쿼드 가져오기' }),
-      h('div', { class: 'desc', text: 'FM에서 내보낸 파일을 올리거나 표를 그대로 붙여넣으세요. 방법은 「안내」 탭에 단계별로 적어 두었습니다.' }),
+      h('div', { class: 'desc', text: 'FM에서 내보낸 파일(.html / .rtf)을 선택하세요. 만드는 방법은 「안내」 탭에 단계별로 적어 두었습니다.' }),
       h('div', { class: 'row', style: 'margin-bottom:9px' }, [
         (function () {
           var input = h('input', {
@@ -626,46 +655,30 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         h('button', { class: 'btn ghost sm', onclick: loadDemo }, ['예시 스쿼드 넣기'])
       ]),
       (ta = h('textarea', {
-        placeholder: 'FM 화면에서 복사한 표 또는 내보낸 HTML/RTF 내용을 여기에 붙여넣으세요.',
+        placeholder: '내보낸 HTML/RTF 내용, 또는 엑셀·구글 시트에서 복사한 표를 여기에 붙여넣으세요.',
         'aria-label': '스쿼드 데이터 붙여넣기'
       })),
-      (repBox = h('div'))
+      importReportBox()
     ]);
     root.appendChild(card);
 
+    // 가져오기 결과는 상태에 담아 두고 render()가 다시 그립니다.
+    // 여기서 DOM에 직접 붙이면 이어지는 render()가 방금 만든 보고를 지웁니다.
     function doImport(text) {
       if (!text || !text.trim()) { toast('가져올 내용이 비어 있습니다.'); return; }
       var res = IMP.parseSquad(text);
-      clear(repBox);
       var r = res.report;
       if (r.error || !res.players.length) {
-        repBox.appendChild(h('div', { class: 'rep err' }, [
-          h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }), r.error || '선수를 하나도 읽지 못했습니다.']),
-          h('div', { class: 'tiny muted', style: 'margin-top:6px',
-            text: '읽은 형식: ' + r.format + ' · 표 행 수: ' + (r.rows || 0) })
-        ]));
+        S.importReport = { ok: false, report: r };
+        render();
         return;
       }
-      // 같은 이름은 덮어쓰고 새 이름은 추가합니다.
-      var byName = {};
-      S.players.forEach(function (p, i) { byName[p.name] = i; });
-      var added = 0, updated = 0;
-      res.players.forEach(function (p) {
-        if (byName[p.name] !== undefined) { S.players[byName[p.name]] = p; updated++; }
-        else { S.players.push(p); added++; }
-      });
+      // 같은 이름이면 덮어쓰지 않고 능력치를 채웁니다 — 열을 나눠 두 번 내보낸
+      // 경우에 두 번째 가져오기가 첫 번째를 지우면 안 되기 때문입니다.
+      var merged = IMP.mergeSquad(S.players, res.players);
+      S.players = merged.players;
       save();
-      var lines = [
-        h('div', {}, [h('b', { text: added + '명 추가' }), updated ? (' · ' + updated + '명 갱신') : '',
-          ' · 능력치 열 ' + r.attrColumns + '개 인식'])
-      ];
-      if (r.noPosition) lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + r.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
-      if (r.noAttrs) lines.push(h('div', { class: 'tiny muted', text: '능력치가 하나도 없는 선수 ' + r.noAttrs + '명.' }));
-      if (r.unknownColumns && r.unknownColumns.length) {
-        lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' + r.unknownColumns.slice(0, 12).join(', ') + (r.unknownColumns.length > 12 ? ' 외 ' + (r.unknownColumns.length - 12) + '개' : '') }));
-      }
-      repBox.appendChild(h('div', { class: 'rep' }, lines));
-      ta.value = '';
+      S.importReport = { ok: true, report: r, merged: merged };
       render();
     }
 

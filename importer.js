@@ -335,8 +335,50 @@
     };
   }
 
+  /*
+   * 기존 스쿼드에 새로 가져온 선수를 합칩니다.
+   *
+   * 같은 이름이면 **덮어쓰지 않고 능력치를 채웁니다.** 열이 많아 화면이 좁을 때
+   * 「이름·포지션·기술·정신」과 「이름·포지션·신체·골키퍼」로 나눠 두 번 내보내는
+   * 방식이 흔한데, 통째로 교체하면 두 번째 가져오기가 첫 번째 능력치를 지웁니다.
+   *
+   * 원본을 건드리지 않고 새 배열을 돌려줍니다.
+   */
+  function mergeSquad(existing, incoming) {
+    var out = (existing || []).map(function (p) {
+      return Object.assign({}, p, { attrs: Object.assign({}, p.attrs || {}) });
+    });
+    var byName = {};
+    out.forEach(function (p, i) { byName[p.name] = i; });
+
+    var added = 0, updated = 0, filled = 0;
+    (incoming || []).forEach(function (p) {
+      var i = byName[p.name];
+      if (i === undefined) {
+        out.push(p);
+        byName[p.name] = out.length - 1;
+        added++;
+        return;
+      }
+      var cur = out[i];
+      Object.keys(p.attrs || {}).forEach(function (k) {
+        if (cur.attrs[k] === undefined) filled++;
+        cur.attrs[k] = p.attrs[k];
+      });
+      // 비어 있는 값으로 이미 있는 값을 지우지 않습니다.
+      if (p.positions && p.positions.length) cur.positions = p.positions;
+      if (p.foot && p.foot !== 'B') cur.foot = p.foot;
+      if (p.age) cur.age = p.age;
+      if (p.club) cur.club = p.club;
+      cur.attrCount = Object.keys(cur.attrs).filter(function (k) { return cur.attrs[k] > 0; }).length;
+      updated++;
+    });
+    return { players: out, added: added, updated: updated, filled: filled };
+  }
+
   root.FM_IMPORTER = {
     parseSquad: parseSquad,
+    mergeSquad: mergeSquad,
     parsePositions: parsePositions,
     parseAttrValue: parseAttrValue,
     parseFoot: parseFoot,
