@@ -274,6 +274,8 @@ input[type=range]{width:100%;accent-color:var(--acc2);background:transparent}
 
 .rep{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;
   font-size:12.5px;line-height:1.65;margin-top:10px}
+.dropzone{transition:border-color .15s,background .15s}
+.dropzone.dragging{border-color:var(--acc);background:rgba(74,222,128,.06)}
 .rep.err{border-color:#4a2226;background:rgba(248,113,113,.07)}
 .rep b{color:var(--acc)}
 
@@ -606,31 +608,45 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   function importReportBox() {
     var ir = S.importReport;
     if (!ir) return h('div');
-    var r = ir.report;
-    if (!ir.ok) {
+    var t = ir.totals;
+
+    if (!t.readFiles) {
+      var first = ir.files[0] || {};
       return h('div', { class: 'rep err' }, [
-        h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }), r.error || '선수를 하나도 읽지 못했습니다.']),
+        h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }),
+          (first.report && first.report.error) || '선수를 하나도 읽지 못했습니다.']),
         h('div', { class: 'tiny muted', style: 'margin-top:6px',
-          text: '읽은 형식: ' + r.format + ' · 표 행 수: ' + (r.rows || 0) })
+          text: first.report ? ('읽은 형식: ' + first.report.format + ' · 표 행 수: ' + (first.report.rows || 0)) : '' })
       ]);
     }
-    var m = ir.merged;
+
     var lines = [
       h('div', {}, [
-        h('b', { text: m.added + '명 추가' }),
-        m.updated ? (' · 기존 ' + m.updated + '명에 능력치 ' + m.filled + '개 채움') : '',
-        ' · 능력치 열 ' + r.attrColumns + '개 인식'
+        h('b', { text: t.added + '명 추가' }),
+        t.updated ? (' · 기존 선수에 능력치 ' + t.filled + '개 채움') : '',
+        ' · 파일 ' + t.readFiles + '개'
       ])
     ];
-    if (r.noPosition && r.noPosition < r.imported) {
-      lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + r.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
+    // 파일이 여럿이면 어느 파일이 무엇을 넣었는지 줄줄이 보여 줍니다.
+    if (ir.files.length > 1) {
+      ir.files.forEach(function (f) {
+        lines.push(h('div', { class: 'tiny muted' }, [
+          h('b', { style: 'color:' + (f.ok ? 'var(--dim)' : 'var(--danger)'), text: (f.name || '붙여넣기') + ' ' }),
+          f.ok
+            ? (f.added + '명 추가 · 능력치 ' + f.filled + '개 · 열 ' + f.report.attrColumns + '개')
+            : ((f.report && f.report.error) || '읽지 못함')
+        ]));
+      });
     }
-    if (r.noAttrs && r.attrColumns) lines.push(h('div', { class: 'tiny muted', text: '능력치가 하나도 없는 선수 ' + r.noAttrs + '명.' }));
-    if (r.unknownColumns && r.unknownColumns.length) {
+    if (t.noPosition && t.noPosition < t.imported) {
+      lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + t.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
+    }
+    if (t.unknown.length) {
       lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' +
-        r.unknownColumns.slice(0, 12).map(function (c) { return c.header + (c.numeric ? '(능력치?)' : ''); }).join(', ') +
-        (r.unknownColumns.length > 12 ? ' 외 ' + (r.unknownColumns.length - 12) + '개' : '') }));
+        t.unknown.slice(0, 12).map(function (c) { return c.header + (c.numeric ? '(능력치?)' : ''); }).join(', ') +
+        (t.unknown.length > 12 ? ' 외 ' + (t.unknown.length - 12) + '개' : '') }));
     }
+    var r = { attrColumns: t.attrColumns, imported: t.imported, noPosition: t.noPosition };
     var out = [h('div', { class: 'rep' }, lines)];
 
     /*
@@ -674,30 +690,12 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   RENDER.squad = function (root) {
     // 가져오기
     var ta;
-    var card = h('div', { class: 'card' }, [
+    var card = h('div', { class: 'card dropzone' }, [
       h('h2', { text: '스쿼드 가져오기' }),
-      h('div', { class: 'desc', text: 'FM에서 내보낸 파일(.html / .rtf)을 선택하세요. 만드는 방법은 「안내」 탭에 단계별로 적어 두었습니다.' }),
+      h('div', { class: 'desc', text: 'FM에서 내보낸 파일(.html / .rtf)을 고르세요. 능력치 묶음별로 나눠 내보낸 파일을 여러 개 한 번에 골라도 되고, 이 카드 위로 끌어다 놓아도 됩니다. 같은 선수는 합쳐집니다.' }),
       h('div', { class: 'row', style: 'margin-bottom:9px' }, [
-        (function () {
-          var input = h('input', {
-            type: 'file', accept: '.html,.htm,.rtf,.txt,.csv,.tsv',
-            style: 'display:none',
-            onchange: function (ev) {
-              var f = ev.target.files && ev.target.files[0];
-              if (!f) return;
-              // 바이트로 읽고 인코딩을 직접 판별합니다 — UTF-16으로 내보내는
-              // 도구의 파일을 UTF-8로 읽으면 열 이름이 하나도 안 맞습니다.
-              var fr = new FileReader();
-              fr.onload = function () { doImport(IMP.decodeBytes(fr.result)); };
-              fr.readAsArrayBuffer(f);
-              ev.target.value = '';
-            }
-          });
-          var btn = h('button', { class: 'btn', onclick: function () { input.click(); } }, ['파일 선택']);
-          var wrap = h('span', {}, [input, btn]);
-          return wrap;
-        })(),
-        h('button', { class: 'btn', onclick: function () { doImport(ta.value); } }, ['붙여넣은 내용 가져오기']),
+        filePicker('파일 선택 (여러 개 가능)', doImportFiles),
+        h('button', { class: 'btn', onclick: function () { doImportMany([{ name: null, text: ta.value }]); } }, ['붙여넣은 내용 가져오기']),
         h('button', { class: 'btn ghost sm', onclick: loadDemo }, ['예시 스쿼드 넣기'])
       ]),
       (ta = h('textarea', {
@@ -706,26 +704,62 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       })),
       importReportBox()
     ]);
+    makeDropTarget(card, doImportFiles);
     root.appendChild(card);
 
-    // 가져오기 결과는 상태에 담아 두고 render()가 다시 그립니다.
-    // 여기서 DOM에 직접 붙이면 이어지는 render()가 방금 만든 보고를 지웁니다.
-    function doImport(text) {
-      if (!text || !text.trim()) { toast('가져올 내용이 비어 있습니다.'); return; }
-      var res = IMP.parseSquad(text);
-      var r = res.report;
-      if (r.error || !res.players.length) {
-        S.importReport = { ok: false, report: r };
-        render();
-        return;
-      }
-      // 같은 이름이면 덮어쓰지 않고 능력치를 채웁니다 — 열을 나눠 두 번 내보낸
-      // 경우에 두 번째 가져오기가 첫 번째를 지우면 안 되기 때문입니다.
-      var merged = IMP.mergeSquad(S.players, res.players);
-      S.players = merged.players;
+    function doImportFiles(fileList) { readFiles(fileList, doImportMany); }
+
+    /*
+     * 여러 파일을 한 번에 받습니다.
+     *
+     * FM은 열이 많으면 화면이 좁아져 능력치 묶음별로 나눠 내보내게 됩니다.
+     * 그걸 하나씩 넣게 하면 여섯 번을 반복해야 하고, 중간에 하나를 빠뜨려도
+     * 알기 어렵습니다. 전부 합친 뒤 파일별로 무엇이 들어왔는지 함께 보고합니다.
+     */
+    function doImportMany(items) {
+      items = (items || []).filter(function (it) { return it && it.text && it.text.trim(); });
+      if (!items.length) { toast('가져올 내용이 비어 있습니다.'); return; }
+
+      var files = [], totals = {
+        added: 0, updated: 0, filled: 0, readFiles: 0,
+        attrColumns: 0, imported: 0, noPosition: 0, unknown: []
+      };
+      var seenUnknown = {};
+      items.forEach(function (it) {
+        var res = IMP.parseSquad(it.text);
+        var r = res.report;
+        if (r.error || !res.players.length) {
+          files.push({ name: it.name, ok: false, report: r });
+          return;
+        }
+        var merged = IMP.mergeSquad(S.players, res.players);
+        S.players = merged.players;
+        files.push({
+          name: it.name, ok: true, report: r,
+          added: merged.added, updated: merged.updated, filled: merged.filled
+        });
+        totals.readFiles++;
+        totals.added += merged.added;
+        totals.updated += merged.updated;
+        totals.filled += merged.filled;
+        totals.attrColumns = Math.max(totals.attrColumns, r.attrColumns);
+        totals.imported = Math.max(totals.imported, r.imported);
+        (r.unknownColumns || []).forEach(function (c) {
+          if (seenUnknown[c.header]) return;
+          seenUnknown[c.header] = 1;
+          totals.unknown.push(c);
+        });
+      });
+      // 포지션은 합친 결과로 다시 셉니다 — 파일마다 따로 세면 한 파일에만 있어도
+      // "전부 포지션 없음"으로 보고됩니다.
+      totals.imported = S.players.length;
+      totals.noPosition = S.players.filter(function (p) { return !(p.positions || []).length; }).length;
+      totals.attrColumns = totals.attrColumns || 0;
+
       save();
-      S.importReport = { ok: true, report: r, merged: merged };
+      S.importReport = { files: files, totals: totals };
       render();
+      if (totals.readFiles) toast(totals.readFiles + '개 파일을 가져왔습니다.');
     }
 
     // 선수 목록
@@ -974,29 +1008,22 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
     // 상대 전술 화면 내보내기 — 시즌 전이라 정보가 없어도 포메이션은 여기 들어 있습니다.
     var ota;
-    var icard = h('div', { class: 'card' }, [
+    var icard = h('div', { class: 'card dropzone' }, [
       h('h2', { text: '상대 전술 화면 가져오기' }),
-      h('div', { class: 'desc', text: 'FM에서 상대 팀 전술 화면을 내보내면 포메이션이 그대로 들어 있습니다. 스쿼드 화면을 내보내면 능력치에서 상대 성향까지 읽습니다.' }),
+      h('div', { class: 'desc', text: 'FM에서 상대 팀 전술 화면을 내보내면 포메이션이 그대로 들어 있습니다. 스쿼드 화면을 내보내면 능력치에서 상대 성향까지 읽습니다. 전술 화면과 스쿼드 화면을 한 번에 골라도 되고, 끌어다 놓아도 됩니다.' }),
       h('div', { class: 'row', style: 'margin-bottom:9px' }, [
-        (function () {
-          var input = h('input', {
-            type: 'file', accept: '.html,.htm,.rtf,.txt,.csv,.tsv', style: 'display:none',
-            onchange: function (ev) {
-              var f = ev.target.files && ev.target.files[0];
-              if (!f) return;
-              var fr = new FileReader();
-              fr.onload = function () { readOpponent(IMP.decodeBytes(fr.result)); };
-              fr.readAsArrayBuffer(f);
-              ev.target.value = '';
-            }
-          });
-          return h('span', {}, [input, h('button', { class: 'btn', onclick: function () { input.click(); } }, ['파일 선택'])]);
-        })(),
-        h('button', { class: 'btn', onclick: function () { readOpponent(ota.value); } }, ['붙여넣은 내용 읽기'])
+        filePicker('파일 선택 (여러 개 가능)', function (fl) { readFiles(fl, readOpponentMany); }),
+        h('button', { class: 'btn', onclick: function () { readOpponentMany([{ name: null, text: ota.value }]); } }, ['붙여넣은 내용 읽기']),
+        S.opponentSquad && S.opponentSquad.length
+          ? h('button', { class: 'btn ghost sm', onclick: function () {
+              S.opponentSquad = []; S.opponentReport = null; save(); render();
+            } }, ['상대 스쿼드 비우기'])
+          : null
       ]),
       (ota = h('textarea', { placeholder: '상대 전술 화면 또는 스쿼드 화면 내보내기 내용', 'aria-label': '상대 데이터 붙여넣기' })),
       oppReportBox()
     ]);
+    makeDropTarget(icard, function (fl) { readFiles(fl, readOpponentMany); });
     root.appendChild(icard);
 
     var fcard = h('div', { class: 'card' }, [
@@ -1100,24 +1127,37 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    * 같은 파일에서 두 가지를 뽑습니다 — 전술 화면이면 자리 목록에서 포메이션을,
    * 능력치가 있으면 스쿼드에서 성향을. 둘 중 하나만 나와도 그것만 반영합니다.
    */
-  function readOpponent(text) {
-    if (!text || !text.trim()) { toast('읽을 내용이 비어 있습니다.'); return; }
-    var rep = { formation: null, matches: [], traits: [], players: 0, attrPlayers: 0 };
+  function readOpponentMany(items) {
+    items = (items || []).filter(function (it) { return it && it.text && it.text.trim(); });
+    if (!items.length) { toast('읽을 내용이 비어 있습니다.'); return; }
+    var rep = { formation: null, matches: [], traits: [], players: 0, attrPlayers: 0, files: 0 };
 
-    var lineup = IMP.parseLineup(text);
-    if (lineup.matches.length) {
-      S.opponent.formationId = lineup.matches[0];
-      rep.formation = lineup.matches[0];
-      rep.matches = lineup.matches;
-    } else if (lineup.positions.length) {
-      rep.positions = lineup.positions;
-    }
+    items.forEach(function (it) {
+      var used = false;
+      // 전술 화면이면 자리 목록에서 포메이션이 나옵니다. 여러 파일 중 처음 성공한
+      // 것을 씁니다 — 스쿼드 화면에는 자리 목록이 없습니다.
+      var lineup = IMP.parseLineup(it.text);
+      if (!rep.formation && lineup.matches.length) {
+        S.opponent.formationId = lineup.matches[0];
+        rep.formation = lineup.matches[0];
+        rep.matches = lineup.matches;
+        used = true;
+      } else if (!rep.formation && !rep.positions && lineup.positions.length) {
+        rep.positions = lineup.positions;
+      }
 
-    var squad = IMP.parseSquad(text);
-    if (squad.players.length) {
-      rep.players = squad.players.length;
-      rep.attrPlayers = squad.players.filter(function (p) { return Object.keys(p.attrs || {}).length >= 3; }).length;
-      S.opponentSquad = IMP.mergeSquad(S.opponentSquad || [], squad.players).players;
+      var squad = IMP.parseSquad(it.text);
+      if (squad.players.length) {
+        S.opponentSquad = IMP.mergeSquad(S.opponentSquad || [], squad.players).players;
+        used = true;
+      }
+      if (used) rep.files++;
+    });
+
+    if (S.opponentSquad && S.opponentSquad.length) {
+      rep.players = S.opponentSquad.length;
+      rep.attrPlayers = S.opponentSquad.filter(function (p) { return Object.keys(p.attrs || {}).length >= 3; }).length;
+      // 성향은 합쳐진 상대 스쿼드 전체로 한 번만 냅니다.
       var traits = E.inferOpponentTraits(S.opponentSquad);
       rep.traits = traits;
       traits.forEach(function (t) {
@@ -1161,6 +1201,13 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       lines.push(ul);
     } else if (r.players && !r.attrPlayers) {
       lines.push(h('div', { class: 'tiny muted', text: '능력치 열이 없어 성향은 읽지 못했습니다 — 상대 스쿼드를 능력치 포함 보기로 내보내면 자동으로 채워집니다.' }));
+    } else if (r.attrPlayers) {
+      // 능력치는 있는데 성향이 하나도 안 나왔다면 대개 포지션이 없어서입니다
+      // (어느 자리 선수인지 몰라 "앞선에 빠른 선수" 같은 판단을 할 수 없습니다).
+      var noPos = (S.opponentSquad || []).filter(function (p) { return !(p.positions || []).length; }).length;
+      lines.push(h('div', { class: 'tiny muted', text: noPos >= r.players
+        ? '능력치는 읽었지만 포지션 열이 없어 성향을 낼 수 없습니다 — 어느 자리 선수인지 모르면 "앞선이 빠르다" 같은 판단이 불가능합니다. 상대 스쿼드에 포지션 열을 넣어 다시 내보내세요.'
+        : '눈에 띄는 성향은 없습니다 — 아래에서 직접 골라도 됩니다.' }));
     }
     if (!lines.length) {
       return h('div', { class: 'rep err' }, ['포메이션도 선수도 읽지 못했습니다. 상대 팀 전술 화면 또는 스쿼드 화면을 내보낸 파일인지 확인하세요.']);
@@ -1424,6 +1471,49 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     }
     root.appendChild(h('div', { class: 'card tight' }, lines));
   };
+
+  // ── 파일 입력 공통 ──────────────────────────────────────────────────────
+  function filePicker(label, onFiles) {
+    var input = h('input', {
+      type: 'file', accept: '.html,.htm,.rtf,.txt,.csv,.tsv', multiple: true,
+      style: 'display:none',
+      onchange: function (ev) {
+        if (ev.target.files && ev.target.files.length) onFiles(ev.target.files);
+        ev.target.value = '';
+      }
+    });
+    return h('span', {}, [input, h('button', { class: 'btn', onclick: function () { input.click(); } }, [label])]);
+  }
+
+  /*
+   * 파일을 순서대로 읽습니다.
+   * 바이트로 읽고 인코딩을 직접 판별합니다 — UTF-16으로 내보내는 도구의 파일을
+   * UTF-8로 읽으면 열 이름이 하나도 맞지 않습니다.
+   */
+  function readFiles(fileList, done) {
+    var files = Array.prototype.slice.call(fileList);
+    var out = [], i = 0;
+    (function next() {
+      if (i >= files.length) { done(out); return; }
+      var f = files[i++];
+      var fr = new FileReader();
+      fr.onload = function () { out.push({ name: f.name, text: IMP.decodeBytes(fr.result) }); next(); };
+      fr.onerror = function () { out.push({ name: f.name, text: null }); next(); };
+      fr.readAsArrayBuffer(f);
+    })();
+  }
+
+  function makeDropTarget(el, onFiles) {
+    ['dragenter', 'dragover'].forEach(function (t) {
+      el.addEventListener(t, function (e) { e.preventDefault(); el.classList.add('dragging'); });
+    });
+    ['dragleave', 'drop'].forEach(function (t) {
+      el.addEventListener(t, function (e) { e.preventDefault(); el.classList.remove('dragging'); });
+    });
+    el.addEventListener('drop', function (e) {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) onFiles(e.dataTransfer.files);
+    });
+  }
 
   function quickCount(p) {
     return Object.keys(p.quickAttrs || {}).filter(function (k) {
