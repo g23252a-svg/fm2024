@@ -452,7 +452,22 @@
     var det = detectAndParse(text);
     var rows = det.rows;
     if (!rows.length) {
-      return { players: [], report: { format: det.format, error: '표를 찾지 못했습니다.', rows: 0 } };
+      /*
+       * 표가 아예 없는 파일. FM 화면 중에는 표가 아니라 그림으로 보여 주는 것이
+       * 있고(전술 화면의 필드 보기), 그 상태로 내보내면 링크 한 줄만 든 빈 문서가
+       * 나옵니다. "표를 찾지 못했습니다"만 띄우면 파일이 잘못된 줄 알게 되므로
+       * FM이 만든 파일인지까지 확인해 무엇을 바꾸면 되는지 알려 줍니다.
+       */
+      var fromFm = /sigames\.com/i.test(String(text));
+      return {
+        players: [],
+        report: {
+          format: det.format, rows: 0, empty: true, fromFm: fromFm,
+          error: fromFm
+            ? 'FM이 만든 파일이 맞지만 표가 비어 있습니다. 그림으로 보여 주는 화면(전술 화면의 필드 보기 등)을 내보내면 이렇게 나옵니다.'
+            : '표를 찾지 못했습니다.'
+        }
+      };
     }
     var head = resolveHeaders(rows, userMap);
     if (!head) {

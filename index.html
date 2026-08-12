@@ -612,11 +612,19 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
     if (!t.readFiles) {
       var first = ir.files[0] || {};
+      var fr = first.report || {};
       return h('div', { class: 'rep err' }, [
-        h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }),
-          (first.report && first.report.error) || '선수를 하나도 읽지 못했습니다.']),
+        h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }), fr.error || '선수를 하나도 읽지 못했습니다.']),
+        fr.empty && fr.fromFm ? h('div', { class: 'small', style: 'margin-top:8px;color:var(--dim)' }, [
+          h('b', { style: 'color:var(--text)', text: '내 팀 스쿼드는 전술 화면 대신 ' }),
+          h('b', { style: 'color:var(--text)', text: '스쿼드 화면' }),
+          h('b', { style: 'color:var(--text)', text: '에서 내보내세요.' }),
+          ' 팀 → 스쿼드에서 보기에 ', h('code', { text: '이름 · 포지션 · 능력치' }),
+          ' 열을 넣고 인쇄 아이콘을 누르면 표가 제대로 나옵니다. ',
+          '전술 화면을 내보내야 한다면 선수 목록이 표로 보이는 상태여야 합니다 — 필드(피치) 그림만 보이는 상태에서는 표가 비어 나옵니다.'
+        ]) : null,
         h('div', { class: 'tiny muted', style: 'margin-top:6px',
-          text: first.report ? ('읽은 형식: ' + first.report.format + ' · 표 행 수: ' + (first.report.rows || 0)) : '' })
+          text: '읽은 형식: ' + (fr.format || '?') + ' · 표 행 수: ' + (fr.rows || 0) })
       ]);
     }
 
@@ -1210,7 +1218,13 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         : '눈에 띄는 성향은 없습니다 — 아래에서 직접 골라도 됩니다.' }));
     }
     if (!lines.length) {
-      return h('div', { class: 'rep err' }, ['포메이션도 선수도 읽지 못했습니다. 상대 팀 전술 화면 또는 스쿼드 화면을 내보낸 파일인지 확인하세요.']);
+      return h('div', { class: 'rep err' }, [
+        h('div', {}, [h('b', { text: '포메이션도 선수도 읽지 못했습니다.' })]),
+        h('div', { class: 'small', style: 'margin-top:7px;color:var(--dim)' }, [
+          '전술 화면이 ', h('b', { style: 'color:var(--text)', text: '선수 목록(표)으로 보이는 상태' }),
+          '에서 내보내야 합니다. 필드(피치) 그림만 보이는 상태로 내보내면 표가 없는 빈 파일이 나옵니다 — 링크 한 줄만 들어 있습니다.'
+        ])
+      ]);
     }
     return h('div', { class: 'rep' }, lines);
   }

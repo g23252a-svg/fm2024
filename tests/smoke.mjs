@@ -369,6 +369,25 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   assert.equal(mental.report.unknownColumns.length, 0,
     `아는 열이 미인식으로 보고됐다: ${mental.report.unknownColumns.map((c) => c.header).join(', ')}`);
 
+  // 표가 없는 내보내기 — FM 전술 화면을 필드 보기 상태로 내보내면 이렇게 나온다.
+  // "표를 찾지 못했습니다"로만 끝내면 파일이 잘못된 줄 알게 되므로,
+  // FM이 만든 파일인지까지 구분해 보고해야 한다.
+  {
+    const empty = IMP.parseSquad(fx('ko-empty-export.html'));
+    assert.equal(empty.players.length, 0);
+    assert.equal(empty.report.empty, true, '빈 내보내기를 빈 것으로 표시하지 않았다');
+    assert.equal(empty.report.fromFm, true, 'FM이 만든 파일임을 알아보지 못했다');
+    assert.ok(/표가 비어/.test(empty.report.error), `안내가 구체적이지 않다: ${empty.report.error}`);
+
+    const notFm = IMP.parseSquad('<html><body><p>hello</p></body></html>');
+    assert.equal(notFm.report.fromFm, false, 'FM 파일이 아닌데 FM 파일로 봤다');
+
+    // 같은 파일에서 포메이션도 당연히 안 나와야 한다 (엉뚱한 형태를 지어내면 안 된다)
+    const emptyLineup = IMP.parseLineup(fx('ko-empty-export.html'));
+    assert.equal(emptyLineup.positions.length, 0);
+    assert.equal(emptyLineup.matches.length, 0, '빈 파일에서 포메이션을 지어냈다');
+  }
+
   // ── 전술 화면 내보내기에서 상대 포메이션 읽기 ──
   const lineup = IMP.parseLineup(fx('ko-tactic-lineup.html'));
   assert.deepEqual([...lineup.positions],
