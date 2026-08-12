@@ -68,6 +68,37 @@ for (const r of RD.ROLES) {
   assert.ok(r.key.length >= 5, `역할 ${r.id}의 key 능력치가 너무 적다`);
 }
 
+/*
+ * 역할마다 고를 수 있는 임무는 게임이 정해 둔 것이다. 여기 없는 임무를 조언하면
+ * 화면에서 그대로 따라 할 수가 없다 — 실제로 인버티드 풀백에 '지원'을 붙여 놓았다가
+ * 게임에는 수비밖에 없다는 지적을 받았다. 그래서 45개 전부를 적어 고정한다.
+ * (FM의 '자동' 임무는 이 도구가 다루지 않는다.)
+ */
+{
+  const FM24_DUTIES = {
+    gk: 'd', sk: 'd s a',
+    cd: 'd st co', bpd: 'd st co', ncb: 'd st co', lib: 'd s', wcb: 'd s a',
+    fb: 'd s a', nfb: 'd', ifb: 'd', wb: 'd s a', cwb: 's a', iwb: 'd s a',
+    dm: 'd s', anc: 'd', hb: 'd', bwm: 'd s', dlp: 'd s', reg: 's', rpm: 's', sv: 's a',
+    cm: 'd s a', b2b: 's', ap: 's a', mez: 's a', car: 's',
+    wm: 'd s a', w: 's a', dw: 'd s', wp: 's a', iw: 's a',
+    if: 's a', rd: 'a', wtf: 's a',
+    am: 's a', treq: 'a', ss: 'a', eng: 's',
+    af: 'a', poa: 'a', cf: 's a', dlf: 's a', tf: 's a', pf: 'd s a', f9: 's'
+  };
+  const known = new Set(Object.keys(FM24_DUTIES));
+  const actual = new Set(RD.ROLES.map((r) => r.id));
+  const unlisted = [...actual].filter((id) => !known.has(id));
+  assert.deepEqual(unlisted, [],
+    `임무 표에 없는 역할이 생겼다 — FM에서 확인해 표에 추가할 것: ${unlisted.join(', ')}`);
+  assert.deepEqual([...known].filter((id) => !actual.has(id)), [],
+    '임무 표에 사라진 역할이 남아 있다');
+  for (const r of RD.ROLES) {
+    assert.equal(r.duties.join(' '), FM24_DUTIES[r.id],
+      `${r.abbr}(${r.ko})의 임무가 게임과 다르다 — 우리: [${r.duties.join(' ')}] / FM24: [${FM24_DUTIES[r.id]}]`);
+  }
+}
+
 // 간편 입력 묶음은 47개 능력치를 빠짐없이 한 번씩만 덮어야 한다.
 // 빠지면 그 능력치가 영영 '모름'으로 남고, 겹치면 뒤 묶음이 앞 묶음을 덮어쓴다.
 {
@@ -711,6 +742,92 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   assert.equal(estimated[0].quickAttrs.fin, 1, 'mergeSquad가 입력의 추정 표시를 변경했다');
 }
 
+// ── 영입한 선수 등록: 선수 한 명의 프로필 화면 ────────────────────────────
+/*
+ * 선수를 새로 영입하면 스쿼드 전체를 다시 내보낼 것 없이 그 선수 화면만
+ * 내보내면 된다. 이 표는 세로로 나오고 이름이 들어 있지 않다.
+ * 이름을 지어내면 엉뚱한 선수 능력치를 덮어쓰므로 반드시 비어 있어야 한다.
+ */
+{
+  const profile = IMP.parsePlayerProfile(read(path.join('tests/fixtures', 'ko-player-profile.html')));
+  assert.equal(profile.error, null, `프로필을 읽지 못했다: ${profile.error}`);
+
+  // 필드 선수 화면에는 GK 능력치가 없다 — 나머지는 하나도 빠지면 안 된다
+  const wantField = [...RD.ATTR_ORDER].filter((a) => RD.ATTRS[a].group !== 'gk');
+  const gotField = wantField.filter((a) => profile.attrs[a] > 0);
+  assert.equal(gotField.length, wantField.length,
+    `필드 능력치가 ${gotField.length}/${wantField.length}개다 — 빠진 것: ` +
+    wantField.filter((a) => !profile.attrs[a]).join(', '));
+  assert.equal(profile.unknown.length, 0,
+    `능력치로 보이는데 인식 못한 줄 — ${profile.unknown.join(', ')}`);
+
+  /*
+   * '개인기'를 Flair로 짐작해 뒀다가 이 파일에서 틀린 것이 드러났다.
+   * 한 화면에 개인기와 천재성이 나란히 있어 서로 다른 능력치임이 확정된다.
+   */
+  assert.equal(profile.attrs.tec, 17, "'개인기'를 Technique으로 읽지 못했다");
+  assert.equal(profile.attrs.fla, 16, "'천재성'을 Flair로 읽지 못했다");
+  assert.equal(profile.attrs.fin, 14, "'골 결정력'을 결정력으로 읽지 못했다");
+  assert.equal(profile.attrs.lth, 4, "'장거리 스로인'을 롱 스로인으로 읽지 못했다");
+  assert.equal(profile.attrs.thr, undefined, '필드 선수 화면에서 GK 던지기를 읽었다');
+
+  // 신장·체중은 능력치가 아니므로 능력치로 새면 안 된다
+  assert.ok(/175/.test(profile.meta.height), `신장을 못 읽었다: ${profile.meta.height}`);
+  assert.ok(/73/.test(profile.meta.weight), `체중을 못 읽었다: ${profile.meta.weight}`);
+
+  // 이름은 파일에 없다 — 지어내지 말고 화면에서 고르게 해야 한다
+  assert.equal(profile.name, undefined, '프로필 파일에 없는 이름을 지어냈다');
+
+  // 읽은 능력치를 그대로 병합하면 기존 선수의 값이 갱신돼야 한다 (영입 후 재계약·성장)
+  const before = [{ name: '새 영입', positions: ['AMC'], attrs: { pas: 10, vis: 10 } }];
+  const after = IMP.mergeSquad(before, [{ name: '새 영입', positions: ['AMC'], attrs: profile.attrs }]);
+  assert.equal(after.added, 0, '이미 있는 선수를 새로 추가했다');
+  assert.equal(after.players[0].attrs.vis, 17, '프로필 값이 반영되지 않았다');
+  assert.equal(after.players[0].attrCount, gotField.length,
+    `병합 후 능력치 수가 ${after.players[0].attrCount}개다`);
+
+  // 스쿼드 화면(가로 표)을 프로필로 읽으면 실패해야 한다 — 경로를 잘못 타면 안 된다
+  const wrong = IMP.parsePlayerProfile('Name\tPosition\tPas\tTec\n김선수\tM (C)\t15\t14');
+  assert.ok(wrong.error, '스쿼드 표를 선수 프로필로 읽어 버렸다');
+}
+
+// ── 방출·임대로 빠진 선수 찾기 ────────────────────────────────────────────
+/*
+ * 선수를 내보냈으면 스쿼드에서도 빠져야 한다. 다만 자동으로 지우면
+ * 능력치 묶음별로 나눠 내보낸 파일 하나만 넣어도 나머지가 전부 사라진다.
+ * 그래서 '없어진 이름'만 돌려주고 판단은 화면에서 사람이 한다.
+ */
+{
+  const have = [{ name: '남는 선수' }, { name: '방출 선수' }, { name: '임대 선수' }];
+
+  const gone = IMP.missingFrom(have, [{ name: '남는 선수' }]);
+  assert.deepEqual([...gone].sort(), ['방출 선수', '임대 선수'].sort(),
+    `빠진 선수를 잘못 찾았다: ${gone.join(', ')}`);
+
+  // 새 파일이 스쿼드를 전부 포함하면 빠진 선수는 없다 (새 영입이 섞여 있어도)
+  assert.equal(
+    IMP.missingFrom(have, have.concat([{ name: '새 영입' }])).length, 0,
+    '아무도 안 빠졌는데 빠진 것으로 봤다');
+
+  // 빈 입력에도 터지지 않아야 한다
+  assert.equal(IMP.missingFrom([], [{ name: 'x' }]).length, 0);
+  assert.deepEqual([...IMP.missingFrom(have, [])].length, 3);
+  assert.equal(IMP.missingFrom(null, null).length, 0);
+
+  /*
+   * 실제 파일로 확인. 같은 스쿼드를 다시 넣으면 빠진 선수가 없어야 하고,
+   * 선수 몇 명만 든 파일을 넣으면 나머지 전원이 '빠진 선수'로 나온다 —
+   * 그래서 화면은 선수가 11명 이상인 파일에서만 방출 후보를 묻는다.
+   */
+  const fx = (n) => read(path.join('tests/fixtures', n));
+  const full = IMP.parseSquad(fx('ko-technical.html')).players;
+  assert.ok(full.length >= 20, `스쿼드를 ${full.length}명만 읽었다`);
+  assert.equal(IMP.missingFrom(full, full).length, 0,
+    '같은 파일을 다시 넣었는데 빠진 선수가 생겼다');
+  assert.equal(IMP.missingFrom(full, full.slice(0, 2)).length, full.length - 2,
+    '일부만 든 파일인데 나머지를 빠진 선수로 보지 않았다 — 화면 쪽 안전장치의 근거가 사라진다');
+}
+
 // ── 테스트용 스쿼드 ───────────────────────────────────────────────────────
 function mkPlayer(name, positions, profile, foot = 'R') {
   const attrs = {};
@@ -872,6 +989,99 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.ok(down1Late.fired.some((f) => f.id === 'down1-late'));
   assert.ok(!down1Late.fired.some((f) => f.id === 'down1-halftime'));
 
+  /*
+   * 동점은 하프타임 규칙 하나뿐이었다. 그래서 85분 1:1에서는 점수에 대한 조언이
+   * 통째로 비고 기록 진단만 나왔다 — 정작 가장 급한 상황에서 아무 말도 못 한 것이다.
+   */
+  for (const ph of ['second-late', 'second-end']) {
+    const drawn = E.inMatchAdvice({ phase: ph, goalsFor: 1, goalsAgainst: 1 });
+    assert.ok(drawn.fired.some((f) => f.group === '점수'),
+      `${ph} 동점인데 점수에 대한 조언이 하나도 없다`);
+  }
+
+  /*
+   * 같은 1:1 85분이라도 상대 전력에 따라 답이 반대여야 한다.
+   * 약체 상대면 잃고 있는 승점 2, 강팀 상대면 지켜야 할 승점 1이다.
+   */
+  {
+    const base = { phase: 'second-end', goalsFor: 1, goalsAgainst: 1 };
+    const weak = E.inMatchAdvice({ ...base, oppLevel: 'weaker' });
+    const strong = E.inMatchAdvice({ ...base, oppLevel: 'stronger' });
+    const even = E.inMatchAdvice({ ...base, oppLevel: 'even' });
+
+    const ids = (r) => r.fired.map((f) => f.id);
+    assert.ok(ids(weak).includes('level-late-weaker'), `약체 상대 동점 조언이 없다: ${ids(weak).join(', ')}`);
+    assert.ok(ids(strong).includes('level-late-stronger'), `강팀 상대 동점 조언이 없다: ${ids(strong).join(', ')}`);
+    assert.ok(ids(even).includes('level-late-even'), `비슷한 상대 동점 조언이 없다: ${ids(even).join(', ')}`);
+
+    // 셋은 서로 배타적이어야 한다 — 동시에 나오면 정반대 조언이 나란히 뜬다
+    for (const r of [weak, strong, even]) {
+      const drawRules = ids(r).filter((id) => id.indexOf('level-late-') === 0);
+      assert.equal(drawRules.length, 1, `동점 규칙이 겹쳤다: ${drawRules.join(', ')}`);
+    }
+
+    // 강팀 상대에서는 "먼저 열지 마세요"가 맨 위여야 한다
+    assert.ok(strong.fired[0].items.some((i) => i.kind === 'hold'),
+      '강팀 상대 동점인데 유지 조언이 맨 위가 아니다');
+    // 약체 상대에서는 반대로 유지 조언이 있으면 안 된다
+    const weakDraw = weak.fired.find((f) => f.id === 'level-late-weaker');
+    assert.ok(!weakDraw.items.some((i) => i.kind === 'hold'),
+      '약체 상대에게 비기고 있는데 그대로 두라고 한다');
+    // 매우 공격적으로 올리라고 하면 안 된다 — 비기던 경기를 지는 경기로 바꾼다
+    assert.ok(weakDraw.items.some((i) => /매우 공격적은 쓰지 마세요/.test(i.text)),
+      '약체 상대 막판에 멘탈리티 상한 경고가 없다');
+
+    // 모르는 값을 넣어도 '비슷함'으로 떨어져야 한다 (약체·강팀으로 찍으면 안 된다)
+    assert.equal(E.inMatchAdvice({ ...base, oppLevel: '???' }).oppLevel, 'even');
+    assert.equal(E.inMatchAdvice(base).oppLevel, 'even');
+  }
+
+  // 85분 이후는 75분과 수단이 다르다 — 여기서만 골키퍼·센터백을 올린다
+  {
+    const end = E.inMatchAdvice({ phase: 'second-end', goalsFor: 0, goalsAgainst: 1 });
+    assert.ok(end.fired.some((f) => f.id === 'endgame-chase'), '막판 총공세 조언이 없다');
+    const mid = E.inMatchAdvice({ phase: 'second-mid', goalsFor: 0, goalsAgainst: 1 });
+    assert.ok(!mid.fired.some((f) => f.id === 'endgame-chase'),
+      '60분인데 골키퍼를 올리라고 한다');
+    /*
+     * 얼리 크로스와 「박스 안까지 볼 배급」은 FM에서 서로 반대 방향의 지시다.
+     * 막판 총공세 조언과 상대가 내려앉았을 때 조언이 같이 뜨면 둘 다 켜게 되므로,
+     * 어느 쪽이 이기는지 조언 안에 적혀 있어야 한다.
+     */
+    const chase = end.fired.find((f) => f.id === 'endgame-chase');
+    assert.ok(chase.items.some((i) => /박스 안까지 볼 배급.*끕니다/.test(i.text)),
+      '얼리 크로스를 켜라면서 박스 안까지 볼 배급과의 충돌을 정리해 주지 않는다');
+
+    const endLead = E.inMatchAdvice({ phase: 'second-end', goalsFor: 2, goalsAgainst: 1 });
+    assert.ok(endLead.fired.some((f) => f.id === 'endgame-hold'));
+    assert.ok(!endLead.fired.some((f) => f.id === 'endgame-chase'),
+      '앞서고 있는데 총공세 조언이 나왔다');
+  }
+
+  // 방금 실점: 시간이 남아 있으면 "5분 버티기", 막바지면 그럴 시간이 없다
+  {
+    const early = E.inMatchAdvice({ phase: 'second-early', goalsFor: 1, goalsAgainst: 1, flags: ['just-conceded'] });
+    const late = E.inMatchAdvice({ phase: 'second-end', goalsFor: 1, goalsAgainst: 1, flags: ['just-conceded'] });
+    assert.ok(early.fired.some((f) => f.id === 'just-conceded'));
+    assert.ok(early.fired[0].items.some((i) => i.kind === 'hold'),
+      '실점 직후인데 "바꾸지 마세요"가 맨 위가 아니다');
+    assert.ok(late.fired.some((f) => f.id === 'just-conceded-late'));
+    assert.ok(!late.fired.some((f) => f.id === 'just-conceded'),
+      '85분에 실점 직후 5분 버티기 조언이 나왔다 — 버틸 시간이 없다');
+    assert.ok(!E.inMatchAdvice({ phase: 'second-end', goalsFor: 1, goalsAgainst: 1 }).fired
+      .some((f) => f.group === '상황'), '표시하지 않은 상황이 발동했다');
+  }
+
+  // 약체에게 지고 있을 때는 원인부터 갈라야 한다 — 무조건 멘탈리티를 올리면 안 된다
+  {
+    const r = E.inMatchAdvice({ phase: 'second-mid', goalsFor: 0, goalsAgainst: 1, oppLevel: 'weaker' });
+    const w = r.fired.find((f) => f.id === 'weaker-behind');
+    assert.ok(w, '약체에게 뒤지고 있는데 전력 차이 조언이 없다');
+    assert.ok(w.items.some((i) => i.kind === 'hold'), '원인을 먼저 고르라는 항목이 없다');
+    assert.ok(!E.inMatchAdvice({ phase: 'second-mid', goalsFor: 0, goalsAgainst: 1, oppLevel: 'even' })
+      .fired.some((f) => f.id === 'weaker-behind'));
+  }
+
   // 상황 표시가 반영되는가
   const red = E.inMatchAdvice({ phase: 'second-early', goalsFor: 0, goalsAgainst: 0, flags: ['red-us'] });
   assert.ok(red.fired.some((f) => f.id === 'red-us'));
@@ -882,16 +1092,44 @@ function run(opponent = {}, context = {}, players = squad) {
   const empty = E.inMatchAdvice({});
   assert.ok(empty.phase && empty.score, '빈 입력에서 형식이 깨졌다');
 
-  // 모든 시간대 × 점수 조합에서 죽지 않고, why가 비지 않는다
+  // 모든 시간대 × 점수 × 전력 조합에서 죽지 않고, why가 비지 않는다
   for (const ph of TD.MATCH_PHASES) {
     for (let d = -3; d <= 3; d++) {
-      const r = E.inMatchAdvice({
-        phase: ph.id, goalsFor: Math.max(0, d), goalsAgainst: Math.max(0, -d),
-        stats: { us: st.right, them: st.left }
-      });
-      for (const f of r.fired) {
-        assert.ok(f.why && f.why.length > 4, `${ph.id}/${d}: ${f.id}의 이유가 비었다`);
-        assert.ok(!/NaN|undefined/.test(f.why), `${ph.id}/${d}: ${f.id}의 이유에 NaN/undefined가 들어갔다 — ${f.why}`);
+      for (const lv of TD.OPP_LEVELS) {
+        const tag = `${ph.id}/${d}/${lv.id}`;
+        const r = E.inMatchAdvice({
+          phase: ph.id, goalsFor: Math.max(0, d), goalsAgainst: Math.max(0, -d),
+          oppLevel: lv.id, stats: { us: st.right, them: st.left }
+        });
+        for (const f of r.fired) {
+          assert.ok(f.why && f.why.length > 4, `${tag}: ${f.id}의 이유가 비었다`);
+          assert.ok(!/NaN|undefined/.test(f.why), `${tag}: ${f.id}의 이유에 NaN/undefined가 들어갔다 — ${f.why}`);
+          for (const i of f.items) {
+            assert.ok(i.text && i.text.length > 4, `${tag}: ${f.id}에 내용이 빈 항목이 있다`);
+            assert.ok(KINDS.has(i.kind), `${tag}: ${f.id}의 알 수 없는 항목 종류 ${i.kind}`);
+          }
+        }
+        // 같은 규칙이 두 번 나오면 화면에 같은 조언이 두 장 뜬다
+        const ids2 = r.fired.map((f) => f.id);
+        assert.equal(new Set(ids2).size, ids2.length, `${tag}: 같은 규칙이 두 번 발동했다`);
+      }
+    }
+  }
+
+  /*
+   * 어떤 시간대·점수·전력 조합에서도 조언이 하나도 없는 칸이 있으면 안 된다.
+   * 85분 동점이 정확히 그 빈칸이었다.
+   */
+  for (const ph of TD.MATCH_PHASES) {
+    for (let d = -2; d <= 2; d++) {
+      for (const lv of TD.OPP_LEVELS) {
+        const r = E.inMatchAdvice({
+          phase: ph.id, goalsFor: Math.max(0, d), goalsAgainst: Math.max(0, -d), oppLevel: lv.id
+        });
+        // 전반 초반 0-0은 정말로 할 말이 없는 것이 맞다
+        if (ph.idx <= 1 && d === 0) continue;
+        assert.ok(r.fired.length > 0,
+          `${ph.ko} ${d >= 0 ? '+' : ''}${d} (상대 ${lv.ko})에서 조언이 하나도 없다`);
       }
     }
   }

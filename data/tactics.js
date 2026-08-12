@@ -538,7 +538,10 @@
     { id: 'half-time', ko: '하프타임', idx: 2 },
     { id: 'second-early', ko: '후반 45~60분', idx: 3 },
     { id: 'second-mid', ko: '60~75분', idx: 4 },
-    { id: 'second-late', ko: '75분 이후', idx: 5 }
+    // 75분과 88분은 쓸 수 있는 수단이 다릅니다. 한 칸으로 묶어 두면
+    // "포메이션을 바꾸세요"와 "골키퍼를 코너에 올리세요"가 같은 조언이 됩니다.
+    { id: 'second-late', ko: '75~85분', idx: 5 },
+    { id: 'second-end', ko: '85분 이후 · 추가시간', idx: 6 }
   ];
 
   var MATCH_FLAGS = [
@@ -547,7 +550,21 @@
     { id: 'opp-changed', ko: '상대가 형태를 바꿈' },
     { id: 'tired', ko: '우리 체력 저하' },
     { id: 'opp-tired', ko: '상대 체력 저하' },
-    { id: 'opp-parked', ko: '상대가 내려앉음' }
+    { id: 'opp-parked', ko: '상대가 내려앉음' },
+    { id: 'just-conceded', ko: '방금 실점함' }
+  ];
+
+  /*
+   * 상대와의 전력 차이.
+   *
+   * 같은 1:1이라도 강팀 원정에서는 지켜야 할 승점 1이고, 약체 홈경기에서는
+   * 잃고 있는 승점 2입니다. 점수만 보고 조언하면 이 둘이 같은 답을 받습니다.
+   * 파일로는 알 수 없으므로 화면에서 직접 고르게 합니다.
+   */
+  var OPP_LEVELS = [
+    { id: 'stronger', ko: '우리보다 강함' },
+    { id: 'even', ko: '비슷함' },
+    { id: 'weaker', ko: '우리보다 약함' }
   ];
 
   // FM 경기 통계 화면의 항목. 가운데가 항목명, 좌우가 두 팀입니다.
@@ -575,11 +592,38 @@
    * 기대 득점이 쌓이는데 골이 안 들어가는 상황에서 전술을 뒤집으면, 만들고 있던
    * 것까지 잃습니다. 그래서 hold 종류의 항목을 따로 둡니다.
    *
-   * c.phaseIdx 0~5, c.diff = 우리 득점 - 상대 득점, c.gf = 우리 득점,
-   * c.flag(id), c.s = 통계(없으면 null), c.us/c.them = 팀별 통계값
+   * c.phaseIdx 0~6, c.diff = 우리 득점 - 상대 득점, c.gf = 우리 득점,
+   * c.flag(id), c.oppLevel = 'stronger'|'even'|'weaker',
+   * c.s = 통계(없으면 null), c.us/c.them = 팀별 통계값
    */
   var INMATCH_RULES = [
     // ── 점수와 시간 ────────────────────────────────────────────────
+    /*
+     * 전반에도 점수가 움직이면 할 말이 있어야 합니다. 예전에는 규칙이 전부
+     * 하프타임 이후만 봐서, 20분에 0:2로 끌려가도 화면이 비어 있었습니다.
+     */
+    {
+      id: 'behind-first-half', tier: 'key', group: '점수',
+      when: function (c) { return c.diff < 0 && c.phaseIdx <= 1; },
+      why: function (c) {
+        return '전반인데 ' + (-c.diff) + '골 뒤지고 있습니다 — 아직 시간이 충분합니다.';
+      },
+      items: [
+        { kind: 'hold', text: '지금 전술을 뒤집지 마세요.', why: '전반에 열면 하프타임 전에 한 골을 더 먹습니다. 그때는 두 골 차가 되어 후반 계획 자체가 없어집니다.' },
+        { kind: 'shape', text: '실점 경로 하나만 막습니다 — 그 골이 측면이었는지 뒷공간이었는지 중앙이었는지.', why: '상대는 통한 길을 다시 씁니다. 한 곳만 고치는 것은 대형을 흔들지 않습니다.' },
+        { kind: 'sub', text: '교체는 하프타임까지 미룹니다. 부상이 아니면 지금 쓰지 마세요.', why: '전반에 쓴 카드는 후반 30분을 버틸 다리를 미리 태우는 것입니다.' }
+      ]
+    },
+    {
+      id: 'lead-first-half', tier: 'normal', group: '점수',
+      when: function (c) { return c.diff > 0 && c.phaseIdx <= 1; },
+      why: function (c) { return '전반에 ' + c.diff + '골 앞서 있습니다.'; },
+      items: [
+        { kind: 'hold', text: '지금 내려앉지 마세요.', why: '이른 리드에서 물러서면 남은 시간이 너무 깁니다. 60분 넘게 우리 진영에서 버티는 경기가 됩니다.' },
+        { kind: 'toggle', text: '역압박을 켜서 상대가 전개를 시작하기 전에 끊습니다.', why: '실점 직후의 상대가 가장 급하게 나오는 구간입니다.' },
+        { kind: 'sub', text: '체력 소모가 큰 역할의 교체를 60분에 맞춰 미리 정해 둡니다.', why: '리드를 지키는 구간이 오기 전에 다리를 남겨 둬야 합니다.' }
+      ]
+    },
     {
       id: 'lead2-halftime', tier: 'key', group: '점수',
       when: function (c) { return c.diff >= 2 && c.phaseIdx === 2; },
@@ -612,6 +656,16 @@
       ]
     },
     {
+      id: 'lead-second-early', tier: 'normal', group: '점수',
+      when: function (c) { return c.diff >= 1 && c.phaseIdx === 3; },
+      why: function (c) { return c.diff + '골 앞선 채 후반이 시작됐습니다.'; },
+      items: [
+        { kind: 'hold', text: '아직 내리지 마세요 — 내리는 구간은 70분부터입니다.', why: '45분에 물러서면 45분을 통째로 버텨야 합니다. 그렇게 지킨 리드는 대개 마지막 15분에 무너집니다.' },
+        { kind: 'toggle', text: '역압박을 켜서 후반 시작 15분을 넘깁니다.', why: '상대가 하프타임에 무엇을 바꿨든 가장 세게 나오는 구간이 여기입니다.' },
+        { kind: 'sub', text: '체력이 떨어진 자리를 60분에 교체할 수 있게 지금 정해 둡니다.', why: '' }
+      ]
+    },
+    {
       id: 'lead1-late', tier: 'key', group: '점수',
       when: function (c) { return c.diff === 1 && c.phaseIdx >= 4; },
       why: '한 골 차 리드로 경기 막바지입니다.',
@@ -631,6 +685,55 @@
         { kind: 'axis', text: '판단이 서지 않으면 멘탈리티를 한 칸만 올리고 60분에 다시 봅니다.', why: '하프타임에 크게 바꾸면 그 변화가 맞았는지 틀렸는지 알 수 없게 됩니다.' }
       ]
     },
+    /*
+     * 동점은 하프타임에만 규칙이 있었습니다. 그래서 85분 동점에서는 점수에 대한
+     * 조언이 하나도 나오지 않고 기록 진단만 떴습니다 — 정작 가장 중요한
+     * "남은 시간에 이 점수를 어떻게 볼 것인가"가 빠져 있었습니다.
+     */
+    {
+      id: 'level-second', tier: 'normal', group: '점수',
+      when: function (c) { return c.diff === 0 && (c.phaseIdx === 3 || c.phaseIdx === 4); },
+      why: '동점으로 후반 중반입니다 — 아직 크게 바꾸지 않아도 되는 마지막 구간입니다.',
+      items: [
+        { kind: 'axis', text: '멘탈리티를 한 칸 올리고 템포를 한 칸 올립니다.', why: '75분이 지나면 선택지가 확 줄어듭니다. 움직이려면 지금이 비용이 가장 쌉니다.' },
+        { kind: 'sub', text: '교체 카드 세 장 중 한 장을 여기서 씁니다 — 지친 자리 하나만.', why: '세 장을 다 막판에 쓰면 새 선수가 경기에 들어올 시간이 없습니다.' }
+      ]
+    },
+    {
+      id: 'level-late-weaker', tier: 'key', group: '점수',
+      when: function (c) { return c.diff === 0 && c.phaseIdx >= 5 && c.oppLevel === 'weaker'; },
+      why: '우리보다 약한 상대와 동점인 채로 막바지입니다 — 지금은 승점 2를 잃고 있는 상태입니다.',
+      items: [
+        { kind: 'axis', text: '멘탈리티를 공격적까지 올립니다. 매우 공격적은 쓰지 마세요.', why: '약체 상대에게 남은 10분은 실점 위험보다 무득점이 더 비쌉니다. 다만 매우 공격적은 대형이 흩어져 역습 한 방에 지는 쪽입니다 — 비기던 경기를 지는 경기로 바꿉니다.' },
+        { kind: 'axis', text: '공격 폭을 최대로 넓히고 수비 라인을 올려 경기장을 압축합니다.', why: '약한 상대가 동점을 지키는 방법은 거의 항상 좁게 내려앉는 것입니다. 좁은 블록은 좌우로 늘려야 열립니다.' },
+        { kind: 'shape', text: '최전방 인원을 한 명 늘립니다 — 수비형 미드필더나 측면 수비 하나를 공격 자원으로 바꿉니다.', why: '지시만 올리면 박스 안 인원은 그대로입니다. 크로스를 아무리 올려도 받을 사람이 없습니다.' },
+        { kind: 'toggle', text: '85분까지는 박스 안까지 볼 배급을 켜고 역습 지시는 끕니다. 85분을 넘기면 얼리 크로스로 바꿉니다.', why: '상대가 이미 내려와 있으면 역습으로 쓸 공간 자체가 없습니다. 다만 마지막 몇 분에는 줄을 쌓을 시간이 없어 방향이 반대가 됩니다 — 두 지시는 같이 켤 수 없습니다.' },
+        { kind: 'sub', text: '남은 교체를 지금 다 씁니다 — 드리블 돌파형 측면과 박스 안 제공권 자원.', why: '아껴 봐야 쓸 경기가 남아 있지 않습니다.' }
+      ]
+    },
+    {
+      id: 'level-late-stronger', tier: 'key', group: '점수',
+      when: function (c) { return c.diff === 0 && c.phaseIdx >= 5 && c.oppLevel === 'stronger'; },
+      why: '우리보다 강한 상대와 동점인 채로 막바지입니다 — 승점 1은 이미 벌어 놓은 것입니다.',
+      items: [
+        { kind: 'hold', text: '먼저 열지 마세요.', why: '전력이 앞선 상대와 서로 열면 그 교환은 우리가 집니다. 여기서 얻을 수 있는 최선은 대부분 무승부입니다.' },
+        { kind: 'axis', text: '수비 라인과 압박 시작 위치를 함께 한 칸 내리고 시간 지연을 올립니다.', why: '라인만 내리면 라인과 압박선 사이가 벌어지고, 그 공간이 그대로 상대의 슈팅 지역이 됩니다.' },
+        { kind: 'sub', text: '체력이 떨어진 수비와 수비형 미드필더부터 교체합니다.', why: '막판 실점은 대부분 다리가 멈춘 자리에서 나옵니다.' },
+        { kind: 'shape', text: '역습 한 방을 노린다면 최전방 한 명만 빠른 선수로 바꾸고 나머지는 그대로 둡니다.', why: '이기려는 시도는 대형을 건드리지 않는 선까지만 합니다.' }
+      ]
+    },
+    {
+      id: 'level-late-even', tier: 'key', group: '점수',
+      when: function (c) {
+        return c.diff === 0 && c.phaseIdx >= 5 && c.oppLevel !== 'weaker' && c.oppLevel !== 'stronger';
+      },
+      why: '비슷한 상대와 동점인 채로 막바지입니다.',
+      items: [
+        { kind: 'axis', text: '멘탈리티를 한 칸만 올립니다.', why: '전력이 비슷하면 서로 여는 순간 먼저 실수하는 쪽이 집니다. 두 칸은 그 실수를 우리가 하게 만듭니다.' },
+        { kind: 'shape', text: '한쪽 측면 수비만 공격 임무로 올리고 그쪽 집중 공격을 켭니다 — 양쪽을 동시에 올리지 마세요.', why: '한쪽만 올리면 반대쪽이 역습을 받아 줍니다.' },
+        { kind: 'sub', text: '남아 있는 교체 카드를 씁니다 — 상대도 다리가 멈춰 있는 구간입니다.', why: '' }
+      ]
+    },
     {
       id: 'down1-halftime', tier: 'key', group: '점수',
       when: function (c) { return c.diff === -1 && c.phaseIdx === 2; },
@@ -639,6 +742,16 @@
         { kind: 'hold', text: '아직 45분 남았습니다 — 지금 다 열지 마세요.', why: '하프타임에 전부 열면 60분에 두 골 차가 되고, 그때는 손쓸 방법이 없습니다.' },
         { kind: 'axis', text: '멘탈리티를 한 칸만 올립니다.', why: '' },
         { kind: 'sub', text: '교체 카드는 60분 이후에 씁니다.', why: '지금 쓰면 마지막 30분에 쓸 카드가 없습니다.' }
+      ]
+    },
+    {
+      id: 'down1-second-early', tier: 'normal', group: '점수',
+      when: function (c) { return c.diff === -1 && c.phaseIdx === 3; },
+      why: '한 골 뒤진 채 후반이 시작됐습니다.',
+      items: [
+        { kind: 'hold', text: '하프타임에 정한 것을 60분까지는 지켜봅니다.', why: '후반 시작 15분은 상대도 아직 자리를 못 잡은 구간입니다. 여기서 또 바꾸면 무엇이 통했는지 알 수 없게 됩니다.' },
+        { kind: 'axis', text: '아직 아무것도 안 바꿨다면 멘탈리티를 한 칸 올립니다.', why: '' },
+        { kind: 'sub', text: '교체는 60분에 맞춰 준비만 해 둡니다.', why: '지금 쓰면 마지막 30분에 쓸 카드가 없습니다.' }
       ]
     },
     {
@@ -653,11 +766,11 @@
     },
     {
       id: 'down1-late', tier: 'key', group: '점수',
-      when: function (c) { return c.diff === -1 && c.phaseIdx === 5; },
+      when: function (c) { return c.diff === -1 && c.phaseIdx >= 5; },
       why: '한 골 뒤진 채 75분을 넘겼습니다.',
       items: [
         { kind: 'shape', text: '포메이션을 바꿔 최전방 인원을 늘립니다(4-2-3-1 → 4-2-4 등).', why: '지시만 올리는 것으로는 박스 안 인원이 늘지 않습니다.' },
-        { kind: 'toggle', text: '85분이 지나면 얼리 크로스와 세트피스 노리기를 켜고 제공권 자원을 최대한 올립니다.', why: '' }
+        { kind: 'sub', text: '남은 교체를 여기서 다 씁니다.', why: '한 장을 아껴 봐야 89분에 들어간 선수는 경기에 영향을 주지 못합니다.' }
       ]
     },
     {
@@ -671,7 +784,78 @@
         { kind: 'sub', text: '체력이 남은 선수를 먼저 투입합니다.', why: '' }
       ]
     },
+    // ── 마지막 5분 ─────────────────────────────────────────────────
+    /*
+     * 85분 이후에는 "포메이션을 바꾸세요" 같은 조언이 이미 늦습니다.
+     * 남은 것은 세트피스와 박스 안 인원, 그리고 시간뿐입니다.
+     */
+    {
+      id: 'endgame-chase', tier: 'key', group: '점수',
+      when: function (c) { return c.phaseIdx === 6 && c.diff <= 0; },
+      why: function (c) {
+        return c.diff === 0 ? '85분이 지났고 동점입니다 — 남은 것은 몇 분뿐입니다.'
+          : '85분이 지났고 뒤지고 있습니다 — 남은 것은 몇 분뿐입니다.';
+      },
+      items: [
+        { kind: 'toggle', text: '얼리 크로스와 세트피스 노리기를 켭니다. 앞에서 「박스 안까지 볼 배급」을 켜 뒀다면 여기서는 끕니다.', why: '남은 시간에 줄을 쌓아 올릴 여유가 없어 가장 짧은 경로인 측면 크로스와 세트피스를 씁니다. 박스 안까지 볼 배급은 얼리 크로스를 막는 지시라 둘을 같이 켜면 서로 지웁니다.' },
+        { kind: 'shape', text: '제공권이 되는 선수를 전부 앞으로 올립니다 — 센터백 한 명을 최전방으로 올리는 것도 여기서는 맞습니다.', why: '80분대까지는 손해지만 마지막 몇 분에는 잃을 것이 없습니다.' },
+        { kind: 'toggle', text: '후방에서 짧게 시작을 끄고 패스를 길게 바꿉니다.', why: '뒤에서부터 만들면 한 번의 공격을 시작하는 데만 30초가 갑니다.' },
+        { kind: 'axis', text: '골키퍼는 코너킥과 프리킥에만 올립니다.', why: '흐름 중에 올리면 그 뒤에 실점하고, 그 실점은 되돌릴 시간이 없습니다.' },
+        { kind: 'sub', text: '교체 카드가 남아 있다면 지금 다 씁니다.', why: '경기 시간을 멈추는 효과까지 같이 얻습니다.' }
+      ]
+    },
+    {
+      id: 'endgame-hold', tier: 'key', group: '점수',
+      when: function (c) { return c.phaseIdx === 6 && c.diff >= 1; },
+      why: '85분이 지났고 앞서 있습니다 — 이제 필요한 것은 골이 아니라 시간입니다.',
+      items: [
+        { kind: 'axis', text: '시간 지연을 최대로 올립니다.', why: '' },
+        { kind: 'toggle', text: '공을 잃으면 재정비, 뺏으면 대형 유지로 둡니다.', why: '역습을 나가려다 공을 잃으면 대형이 벌어진 채로 상대 공격을 맞습니다.' },
+        { kind: 'sub', text: '교체 카드가 남아 있으면 씁니다 — 누구를 넣느냐보다 시간을 쓰는 것이 목적입니다.', why: '' },
+        { kind: 'shape', text: '코너킥·프리킥 수비에 전원을 남기고, 최전방 한 명만 앞에 둡니다.', why: '완전히 비우면 걷어낸 공이 즉시 되돌아와 압박이 끊이지 않습니다.' }
+      ]
+    },
+    // ── 전력 차이 ──────────────────────────────────────────────────
+    {
+      id: 'weaker-behind', tier: 'key', group: '전력',
+      when: function (c) { return c.oppLevel === 'weaker' && c.diff < 0 && c.phaseIdx >= 2; },
+      why: '우리보다 약한 상대에게 뒤지고 있습니다.',
+      items: [
+        { kind: 'hold', text: '먼저 원인을 고르세요 — 상대가 내려앉아 못 여는 것과 역습에 계속 뚫리는 것은 정반대의 처방입니다.', why: '약체에게 지고 있을 때 가장 흔한 실수가 무조건 멘탈리티부터 올리는 것입니다. 역습에 당하고 있었다면 그 순간 경기가 끝납니다.' },
+        { kind: 'axis', text: '못 여는 쪽이면 공격 폭을 넓히고 수비 라인을 올려 상대를 자기 진영에 가둡니다.', why: '약한 상대는 라인을 올려도 뒷공간을 쓸 능력이 부족한 경우가 많습니다.' },
+        { kind: 'axis', text: '역습에 당하는 쪽이면 멘탈리티는 그대로 두고 측면 수비 임무만 내립니다.', why: '뒤가 뚫리는 상태에서 더 올리면 뚫리는 횟수만 늘어납니다.' }
+      ]
+    },
+    {
+      id: 'stronger-lead', tier: 'normal', group: '전력',
+      when: function (c) { return c.oppLevel === 'stronger' && c.diff > 0 && c.phaseIdx >= 3; },
+      why: '우리보다 강한 상대를 상대로 앞서 있습니다.',
+      items: [
+        { kind: 'hold', text: '완전히 내려앉지는 마세요.', why: '전력이 앞선 상대를 우리 진영으로 불러들이면 결국 숫자에서 집니다. 버티는 시간이 길수록 실점 확률이 올라갑니다.' },
+        { kind: 'shape', text: '최전방에 빠른 선수를 한 명 남겨 역습 위협을 유지합니다.', why: '상대 센터백이 올라오지 못하게 붙잡아 두는 것만으로 압박이 줄어듭니다.' },
+        { kind: 'axis', text: '압박 강도는 낮추되 압박 시작 위치는 너무 내리지 않습니다.', why: '' }
+      ]
+    },
     // ── 특수 상황 ──────────────────────────────────────────────────
+    {
+      id: 'just-conceded', tier: 'key', group: '상황',
+      when: function (c) { return c.flag('just-conceded') && c.phaseIdx <= 4; },
+      why: '방금 실점했습니다 — 통계적으로 다음 실점이 가장 잘 나오는 구간입니다.',
+      items: [
+        { kind: 'hold', text: '실점 직후 5분은 형태를 바꾸지 마세요.', why: '실점 직후에 손대면 흔들린 상태에서 대형까지 새로 맞춰야 합니다. 두 번째 실점이 여기서 나옵니다.' },
+        { kind: 'shape', text: '그 골이 어디서 나왔는지부터 보고 그 경로 하나만 막습니다.', why: '상대는 통한 길을 반드시 다시 씁니다. 측면 크로스였다면 안쪽으로 유도, 뒷공간이었다면 수비 라인을 내리는 식으로 한 곳만 고칩니다.' },
+        { kind: 'axis', text: '5분을 넘긴 뒤에 점수에 맞춰 움직입니다.', why: '' }
+      ]
+    },
+    {
+      id: 'just-conceded-late', tier: 'key', group: '상황',
+      when: function (c) { return c.flag('just-conceded') && c.phaseIdx >= 5; },
+      why: '막바지에 실점했습니다 — 기다릴 시간이 없습니다.',
+      items: [
+        { kind: 'shape', text: '실점 경로 한 곳만 막고, 나머지는 점수에 맞춰 그대로 밀어붙입니다.', why: '남은 시간이 짧으면 "5분 버티기"는 곧 경기를 포기하는 것과 같습니다. 다만 상대가 통한 길을 그대로 다시 쓰게 두면 두 골 차가 됩니다.' },
+        { kind: 'sub', text: '실점 장면에서 뚫린 선수가 지쳐 있으면 그 자리부터 교체합니다.', why: '같은 자리가 두 번 뚫리는 것이 막판 실점의 가장 흔한 모양입니다.' }
+      ]
+    },
     {
       id: 'red-us', tier: 'key', group: '상황',
       when: function (c) { return c.flag('red-us'); },
@@ -927,6 +1111,7 @@
     RULES: RULES,
     MATCH_PHASES: MATCH_PHASES,
     MATCH_FLAGS: MATCH_FLAGS,
+    OPP_LEVELS: OPP_LEVELS,
     MATCH_STATS: MATCH_STATS,
     INMATCH_RULES: INMATCH_RULES,
     SCENARIOS: SCENARIOS

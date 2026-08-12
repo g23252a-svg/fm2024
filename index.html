@@ -393,11 +393,13 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     context: { venue: 'home', odds: 'even', goal: 'win' },
     pinnedFormation: null,
     standing: 'mid',
-    match: { phase: 'half-time', gf: 0, ga: 0, flags: [], stats: null, side: 'right' },
+    match: { phase: 'half-time', gf: 0, ga: 0, oppLevel: 'even', flags: [], stats: null, side: 'right' },
     tab: 'squad',
     editing: null,
     overlay: false,
     importReport: null,
+    pendingProfiles: [],
+    departed: null,
     opponentSquad: [],
     opponentReport: null
   };
@@ -620,6 +622,112 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   // ── 스쿼드 탭 ───────────────────────────────────────────────────────────
   var RENDER = {};
 
+  /*
+   * 프로필 화면으로 들어온 능력치를 누구에게 붙일지 고릅니다.
+   * 새 선수로 넣을 수도, 기존 선수를 갱신할 수도 있습니다.
+   */
+  function pendingProfileCard() {
+    var list = S.pendingProfiles || [];
+    if (!list.length) return null;
+    var card = h('div', { class: 'card', style: 'border-color:#1e3a4a;background:rgba(56,189,248,.05)' }, [
+      h('h2', { text: '선수 프로필 ' + list.length + '건 — 누구인가요?' }),
+      h('div', { class: 'desc', text: '선수 한 명의 화면에는 이름이 들어 있지 않습니다. 새로 영입한 선수면 이름을 적어 추가하고, 기존 선수의 능력치를 갱신하는 것이면 목록에서 고르세요. 포지션도 프로필에 없으니 추가한 뒤 지정해야 합니다.' })
+    ]);
+    list.forEach(function (prof, idx) {
+      var nameInput, sel;
+      function drop() { S.pendingProfiles.splice(idx, 1); save(); render(); }
+      card.appendChild(h('div', { class: 'rep', style: 'margin-top:8px' }, [
+        h('div', { class: 'small', style: 'margin-bottom:8px' }, [
+          h('b', { text: '능력치 ' + prof.count + '개' }),
+          prof.name ? h('span', { class: 'tiny muted', text: '  · ' + prof.name }) : null,
+          prof.meta && prof.meta.height ? h('span', { class: 'tiny muted', text: '  · ' + prof.meta.height + ' / ' + (prof.meta.weight || '') }) : null
+        ]),
+        h('div', { class: 'grid2' }, [
+          h('div', {}, [
+            h('label', { class: 'f', text: '새 선수로 추가' }),
+            (nameInput = h('input', { type: 'text', placeholder: '선수 이름' })),
+            h('button', {
+              class: 'btn sm pri', style: 'margin-top:6px;width:100%',
+              onclick: function () {
+                var nm = (nameInput.value || '').trim();
+                if (!nm) { toast('이름을 적어 주세요.'); return; }
+                var merged = IMP.mergeSquad(S.players, [{
+                  id: 'prof' + Date.now(), name: nm, positions: [], foot: 'B', attrs: prof.attrs
+                }]);
+                S.players = merged.players;
+                S.editing = S.players.length - 1;
+                S._baseCache = null; S._needsCache = null;
+                drop();
+                toast(nm + ' 추가 — 포지션을 지정해 주세요.');
+              }
+            }, ['추가하고 포지션 지정'])
+          ]),
+          h('div', {}, [
+            h('label', { class: 'f', text: '기존 선수 갱신' }),
+            (sel = (function () {
+              var s2 = h('select');
+              s2.appendChild(h('option', { value: '', text: '선수 선택…' }));
+              S.players.forEach(function (p, i) {
+                s2.appendChild(h('option', { value: String(i), text: p.name }));
+              });
+              return s2;
+            })()),
+            h('button', {
+              class: 'btn sm', style: 'margin-top:6px;width:100%',
+              onclick: function () {
+                if (sel.value === '') { toast('선수를 골라 주세요.'); return; }
+                var target = S.players[+sel.value];
+                var merged = IMP.mergeSquad(S.players, [{ name: target.name, positions: [], attrs: prof.attrs }]);
+                S.players = merged.players;
+                S._baseCache = null; S._needsCache = null;
+                drop();
+                toast(target.name + '의 능력치를 갱신했습니다.');
+              }
+            }, ['이 선수 갱신'])
+          ])
+        ]),
+        h('div', { class: 'row', style: 'margin-top:8px' }, [
+          h('button', { class: 'btn sm ghost', onclick: drop }, ['버리기'])
+        ])
+      ]));
+    });
+    return card;
+  }
+
+  /*
+   * 이 파일에 없던 선수 — 방출·임대로 빠졌을 수 있습니다.
+   * 자동으로 지우면 묶음별로 나눠 내보낸 파일 하나만 넣어도 스쿼드가 날아갑니다.
+   */
+  function departedCard() {
+    var d = S.departed;
+    if (!d || !d.names.length) return null;
+    return h('div', { class: 'card', style: 'border-color:#4a3c17;background:rgba(251,191,36,.05)' }, [
+      h('h2', { text: '이 파일에 없는 선수 ' + d.names.length + '명' }),
+      h('div', { class: 'desc', text: '가져온 파일에는 ' + d.fileCount + '명이 들어 있는데 아래 선수들은 없습니다. 방출·임대로 빠졌다면 지우고, 다른 화면에서 내보낸 파일이라 빠진 것뿐이면 그대로 두세요.' }),
+      h('div', { class: 'chips', style: 'margin-bottom:10px' }, d.names.map(function (n) {
+        return h('span', { class: 'chip', style: 'cursor:default', text: n });
+      })),
+      h('div', { class: 'row' }, [
+        h('button', {
+          class: 'btn sm danger',
+          onclick: function () {
+            var gone = {};
+            d.names.forEach(function (n) { gone[n] = 1; });
+            S.players = S.players.filter(function (p) { return !gone[p.name]; });
+            S.departed = null;
+            S._baseCache = null; S._needsCache = null;
+            save(); render();
+            toast(d.names.length + '명을 스쿼드에서 지웠습니다.');
+          }
+        }, ['지우기']),
+        h('button', {
+          class: 'btn sm ghost',
+          onclick: function () { S.departed = null; save(); render(); }
+        }, ['그대로 두기'])
+      ])
+    ]);
+  }
+
   function importReportBox() {
     var ir = S.importReport;
     if (!ir) return h('div');
@@ -628,6 +736,14 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (!t.readFiles) {
       var first = ir.files[0] || {};
       var fr = first.report || {};
+      // 선수 프로필은 실패가 아니라 "이름만 더 필요한" 상태입니다.
+      // 아래에 고르는 칸이 떠 있는데 위에서 실패했다고 하면 서로 어긋납니다.
+      if (S.pendingProfiles && S.pendingProfiles.length) {
+        return h('div', { class: 'rep' }, [
+          h('div', {}, [h('b', { text: '선수 프로필로 읽었습니다. ' }),
+            '스쿼드 표가 아니라 선수 한 명의 화면입니다 — 아래에서 누구인지 골라 주세요.'])
+        ]);
+      }
       return h('div', { class: 'rep err' }, [
         h('div', {}, [h('b', { text: '가져오지 못했습니다. ' }), fr.error || '선수를 하나도 읽지 못했습니다.']),
         fr.empty && fr.fromFm ? h('div', { class: 'small', style: 'margin-top:8px;color:var(--dim)' }, [
@@ -748,13 +864,29 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         attrColumns: 0, imported: 0, noPosition: 0, unknown: []
       };
       var seenUnknown = {};
+      var biggest = null;
       items.forEach(function (it) {
         var res = IMP.parseSquad(it.text);
         var r = res.report;
         if (r.error || !res.players.length) {
+          /*
+           * 선수 한 명의 프로필 화면은 표가 세로라 스쿼드로 읽히지 않습니다.
+           * 이름이 들어 있지 않으므로 능력치만 담아 두고 누구인지 물어봅니다 —
+           * 이름을 지어내면 엉뚱한 선수의 능력치를 덮어씁니다.
+           */
+          var prof = IMP.parsePlayerProfile(it.text);
+          if (!prof.error) {
+            S.pendingProfiles = (S.pendingProfiles || []).concat([{
+              name: it.name || null, attrs: prof.attrs, count: prof.count, meta: prof.meta
+            }]);
+            files.push({ name: it.name, ok: false, report: { error: '선수 한 명의 프로필로 읽었습니다 — 아래에서 누구인지 골라 주세요.' } });
+            return;
+          }
           files.push({ name: it.name, ok: false, report: r });
           return;
         }
+        // 방출·임대 판단은 가장 많은 선수가 든 파일 하나로만 합니다.
+        if (!biggest || res.players.length > biggest.length) biggest = res.players;
         var merged = IMP.mergeSquad(S.players, res.players);
         S.players = merged.players;
         files.push({
@@ -779,11 +911,27 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       totals.noPosition = S.players.filter(function (p) { return !(p.positions || []).length; }).length;
       totals.attrColumns = totals.attrColumns || 0;
 
+      /*
+       * 이 파일에 없는 선수 — 방출·임대로 빠졌을 수 있습니다.
+       * 자동으로 지우지는 않습니다. 능력치 묶음별로 나눠 내보낸 파일 하나만 넣어도
+       * 나머지가 전부 '없는 선수'가 되기 때문입니다. 판단은 사람이 합니다.
+       */
+      S.departed = null;
+      if (biggest && biggest.length >= 11) {
+        var missing = IMP.missingFrom(S.players, biggest);
+        if (missing.length) S.departed = { names: missing, fileCount: biggest.length };
+      }
+
       save();
       S.importReport = { files: files, totals: totals };
       render();
       if (totals.readFiles) toast(totals.readFiles + '개 파일을 가져왔습니다.');
     }
+
+    var pend = pendingProfileCard();
+    if (pend) root.appendChild(pend);
+    var dep = departedCard();
+    if (dep) root.appendChild(dep);
 
     // 선수 목록
     var listCard = h('div', { class: 'card' }, [
@@ -2093,6 +2241,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   // ── 경기 중 탭 ──────────────────────────────────────────────────────────
   RENDER.match = function (root) {
     var M = S.match;
+    // 예전 판에서 저장한 상태에는 없는 값입니다
+    if (!M.oppLevel) M.oppLevel = 'even';
 
     // 1) 상황
     var flagChips = h('div', { class: 'chips' });
@@ -2139,6 +2289,21 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
             oninput: function (e) { M.ga = Math.max(0, parseInt(e.target.value, 10) || 0); save(); refreshAdvice(); }
           })
         ])
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', { class: 'f', text: '상대 전력' }),
+        (function () {
+          var seg = h('div', { class: 'seg' });
+          TD.OPP_LEVELS.forEach(function (l) {
+            seg.appendChild(h('button', {
+              'aria-pressed': M.oppLevel === l.id ? 'true' : 'false',
+              onclick: function () { M.oppLevel = l.id; save(); render(); }
+            }, [l.ko]));
+          });
+          return seg;
+        })(),
+        h('div', { class: 'tiny muted', style: 'margin-top:5px',
+          text: '같은 1:1이라도 강팀 원정에서는 지켜야 할 승점 1이고, 약체 상대로는 잃고 있는 승점 2입니다.' })
       ]),
       h('label', { class: 'f', text: '해당하는 상황' }),
       flagChips
@@ -2216,7 +2381,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     var advice;
     try {
       advice = E.inMatchAdvice({
-        phase: M.phase, goalsFor: M.gf, goalsAgainst: M.ga, flags: M.flags,
+        phase: M.phase, goalsFor: M.gf, goalsAgainst: M.ga,
+        oppLevel: M.oppLevel, flags: M.flags,
         stats: M.stats && !M.stats.error
           ? { us: M.stats[M.side], them: M.stats[M.side === 'left' ? 'right' : 'left'] }
           : null
@@ -2231,6 +2397,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         advice.phase.ko + ' · ',
         h('span', { style: 'color:' + (advice.score.diff > 0 ? 'var(--acc)' : advice.score.diff < 0 ? 'var(--danger)' : 'var(--dim)'),
           text: advice.score.gf + ' : ' + advice.score.ga }),
+        h('span', { class: 'tiny muted', text: '  · 상대 ' + oppLevelKo(advice.oppLevel) }),
         advice.hasStats ? h('span', { class: 'tiny muted', text: '  · 전반 기록 반영' }) : null
       ]),
       h('div', { class: 'desc', text: advice.fired.length
@@ -2302,11 +2469,16 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   function fmtStat(v) {
     return (typeof v === 'number' && isFinite(v)) ? String(v) : '—';
   }
+  function oppLevelKo(id) {
+    var l = TD.OPP_LEVELS.filter(function (x) { return x.id === id; })[0];
+    return l ? l.ko : id;
+  }
 
   function copyAdvice(advice) {
     var L = [];
     L.push('■ 경기 중 조정 — ' + advice.phase.ko + ' ' + advice.score.gf + ':' + advice.score.ga
-      + (advice.hasStats ? ' (전반 기록 반영)' : ''));
+      + ' (상대 ' + oppLevelKo(advice.oppLevel) + ')'
+      + (advice.hasStats ? ' · 전반 기록 반영' : ''));
     advice.fired.forEach(function (f) {
       L.push('');
       L.push('[' + (f.tier === 'key' ? '핵심' : '참고') + '/' + f.group + '] ' + f.why);

@@ -234,10 +234,11 @@
     {
       id: 'ifb', ko: '인버티드 풀백', abbr: 'IFB', en: 'Inverted Full Back',
       req: { hea: 11, pos: 12 },
-      pos: ['DR', 'DL'], duties: ['d', 's'],
+      // FM24에서 인버티드 풀백은 수비 임무 하나뿐입니다. 공을 잡으면 안으로 들어와
+      // 세 번째 센터백이 되는 역할이라 '지원'이라는 선택지가 게임에 없습니다.
+      pos: ['DR', 'DL'], duties: ['d'],
       key: ['mar', 'tck', 'pos', 'hea', 'ant', 'cnt', 'dec', 'cmp', 'tea', 'str'],
       pref: ['pas', 'fir', 'tec', 'agi', 'jum', 'wor'],
-      dutyKey: { s: ['pas', 'fir', 'tec', 'vis'] },
       tags: ['inverted', 'defensive-cover', 'buildout', 'narrow'],
       note: '공을 잡으면 안쪽으로 좁혀 세 번째 센터백처럼 섭니다. 측면 폭이 사라지므로 그쪽 윙어는 반드시 넓게 서야 합니다.'
     },

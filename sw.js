@@ -1,4 +1,4 @@
-const VERSION='1.2.0';
+const VERSION='1.3.0';
 const CACHE='fm24-tactics-'+VERSION;
 const ASSETS=['./','./index.html','./engine.js','./importer.js','./data/roles.js','./data/formations.js','./data/tactics.js','./manifest.webmanifest','./icon.svg'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));

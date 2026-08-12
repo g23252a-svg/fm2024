@@ -1974,9 +1974,15 @@
     var us = normStats(hasStats ? input.stats.us : null);
     var them = normStats(hasStats ? input.stats.them : null);
 
+    // 모르면 '비슷함'으로 봅니다. 여기서 약체나 강팀으로 찍으면 조언이
+    // 정반대로 갈리므로, 확인되지 않은 쪽으로 기울이지 않습니다.
+    var levels = TD.OPP_LEVELS.map(function (l) { return l.id; });
+    var oppLevel = levels.indexOf(input.oppLevel) >= 0 ? input.oppLevel : 'even';
+
     var c = {
       phase: phase.id, phaseIdx: phase.idx,
       diff: gf - ga, gf: gf, ga: ga,
+      oppLevel: oppLevel,
       flag: function (id) { return flags.indexOf(id) >= 0; },
       s: hasStats, us: us, them: them
     };
@@ -2002,7 +2008,7 @@
 
     return {
       phase: phase, score: { gf: gf, ga: ga, diff: gf - ga },
-      flags: flags, hasStats: hasStats,
+      oppLevel: oppLevel, flags: flags, hasStats: hasStats,
       stats: hasStats ? { us: us, them: them } : null,
       fired: fired
     };

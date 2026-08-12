@@ -83,29 +83,29 @@
     cor: ['코너', 'Cor', 'Corners', '코너킥'],                                    // ★ 코너
     cro: ['크로스', 'Cro', 'Crossing'],                                           // ★ 크로스
     dri: ['돌파', 'Dri', 'Dribbling', '드리블'],                                  // ★ 돌파
-    fin: ['결정', 'Fin', 'Finishing', '결정력', '마무리'],                        // ★ 결정
+    fin: ['결정', '골 결정력', 'Fin', 'Finishing', '결정력', '마무리'],             // ★ 결정 / 골 결정력
     fir: ['트랩', 'Fir', 'First Touch', '퍼스트 터치', '볼 컨트롤'],              // ★ 트랩
     fre: ['프리', 'Fre', 'Free Kick Taking', 'Free Kicks', '프리킥'],             // ★ 프리
     hea: ['헤더', 'Hea', 'Heading', '헤딩'],                                      // ★ 헤더
     lon: ['롱슛', 'Lon', 'Long Shots', '중거리 슛', '장거리 슛'],                 // ★ 롱슛
-    lth: ['스로인', 'L Th', 'LTh', 'Long Throws', '롱 스로인'],                   // ★ 스로인
-    mar: ['마크', 'Mar', 'Marking', '마킹'],                                      // ★ 마크
+    lth: ['스로인', '장거리 스로인', 'L Th', 'LTh', 'Long Throws', '롱 스로인'],    // ★ 스로인 / 장거리 스로인
+    mar: ['마크', '일대일 마크', 'Mar', 'Marking', '마킹'],                        // ★ 마크 / 일대일 마크
     pas: ['패스', 'Pas', 'Passing'],                                              // ★ 패스
     pen: ['PK', 'Pen', 'Penalty Taking', '페널티킥'],                             // ★ PK
     tck: ['태클', 'Tck', 'Tackling'],                                             // ★ 태클
-    tec: ['기술', 'Tec', 'Technique', '테크닉'],                                  // ★ 기술
+    tec: ['기술', '개인기', 'Tec', 'Technique', '테크닉'],                          // ★ 기술 / 개인기(프로필 화면)
     // 정신
     agg: ['적극', 'Agg', 'Aggression', '적극성'],                                 // ★ 적극
     ant: ['예측', 'Ant', 'Anticipation', '예측력'],                               // ★ 예측
-    bra: ['대담', 'Bra', 'Bravery', '대담성', '용감성'],                          // ★ 대담
+    bra: ['대담', '대담성', 'Bra', 'Bravery', '용감성'],                           // ★ 대담 / 대담성
     cmp: ['침착', 'Cmp', 'Composure', '침착성'],                                  // ★ 침착
     cnt: ['집중', 'Cnt', 'Con', 'Concentration', '집중력'],                       // ★ 집중
     dec: ['판단', 'Dec', 'Decisions', '판단력'],                                  // ★ 판단
-    det: ['승부', 'Det', 'Determination', '결단력', '승부욕'],                    // ★ 승부
-    fla: ['천재', 'Fla', 'Flair', '창조성', '개인기'],                            // ★ 천재
+    det: ['승부', '승부욕', 'Det', 'Determination', '결단력'],                     // ★ 승부 / 승부욕
+    fla: ['천재', '천재성', 'Fla', 'Flair', '창조성'],                             // ★ 천재 / 천재성(프로필 화면)
     ldr: ['리더십', 'Ldr', 'Leadership', '지도력'],                               // ★ 리더십
     otb: ['오프 더 볼', 'OtB', 'Off the Ball', '오프더볼', '움직임'],             // ★ 오프 더 볼
-    pos: ['위치', 'Positioning', '위치 선정'],                                    // ★ 위치
+    pos: ['위치', '수비 위치 선정', 'Positioning', '위치 선정'],                    // ★ 위치 / 수비 위치 선정
     tea: ['팀워크', 'Tea', 'Teamwork', '협동심'],                                 // ★ 팀워크
     vis: ['시야', 'Vis', 'Vision'],                                               // ★ 시야
     wor: ['활동', 'Wor', 'Work Rate', '활동량'],                                  // ★ 활동
@@ -113,10 +113,10 @@
     acc: ['순간 속도', 'Acc', 'Acceleration', '가속도'],                          // ★ 순간 속도
     agi: ['민첩', 'Agi', 'Agility', '민첩성'],                                    // ★ 민첩
     bal: ['균형', 'Bal', 'Balance', '균형 감각'],                                 // ★ 균형
-    jum: ['점프', 'Jum', 'Jumping Reach', '점프 도달력'],                         // ★ 점프
+    jum: ['점프', '점프 거리', 'Jum', 'Jumping Reach', '점프 도달력'],              // ★ 점프 / 점프 거리
     nat: ['타고난 체력', 'Nat', 'Natural Fitness', '자연 체력'],                  // ★ 타고난 체력
     pac: ['주력', 'Pac', 'Pace', '속도'],                                         // ★ 주력
-    sta: ['지구', 'Sta', 'Stamina', '지구력', '스태미너'],                        // ★ 지구
+    sta: ['지구', '지구력', 'Sta', 'Stamina', '스태미너'],                         // ★ 지구 / 지구력
     str: ['몸싸움', 'Str', 'Strength', '체격']                                    // ★ 몸싸움
   };
   Object.keys(ALIASES).forEach(function (id) {
@@ -538,6 +538,49 @@
   }
 
   /*
+   * ── 선수 프로필 화면 읽기 ───────────────────────────────────────────────
+   *
+   * 선수 한 명의 화면을 내보내면 표가 세로로 나옵니다.
+   *     | 개인기 |  | 17 |
+   *     | 골 결정력 |  | 14 |
+   * 스쿼드 화면과 달리 **이름이 들어 있지 않습니다.** 그래서 능력치만 읽어
+   * 돌려주고, 누구인지는 화면에서 고르게 합니다 — 이름을 지어내면 엉뚱한 선수의
+   * 능력치를 덮어씁니다.
+   *
+   * 영입한 선수를 한 명씩 넣을 때 쓰는 경로입니다.
+   */
+  function parsePlayerProfile(text) {
+    var det = detectAndParse(text);
+    var attrs = {}, unknown = [], meta = {};
+    det.rows.forEach(function (row) {
+      var cells = row.map(function (c) { return String(c == null ? '' : c).trim(); });
+      // 값이 들어 있는 마지막 칸을 값으로 봅니다(가운데 빈 칸이 끼어 있습니다).
+      var label = cells[0];
+      var value = null;
+      for (var i = cells.length - 1; i >= 1; i--) {
+        if (cells[i] !== '') { value = cells[i]; break; }
+      }
+      if (!label || value === null) return;
+      if (/^(신장|키|Height)$/.test(label)) { meta.height = value; return; }
+      if (/^(체중|몸무게|Weight)$/.test(label)) { meta.weight = value; return; }
+      var field = lookupHeader(label);
+      if (!field || field.indexOf('attr:') !== 0) {
+        // 구분 줄(기술적 능력 · 정신적 능력 · 신체)은 값이 비어 있어 여기 오지 않습니다.
+        if (/^\d{1,2}$/.test(value)) unknown.push(label);
+        return;
+      }
+      var v = parseAttrValue(value);
+      if (v !== null) attrs[field.slice(5)] = v;
+    });
+    var count = Object.keys(attrs).length;
+    return {
+      attrs: attrs, meta: meta, unknown: unknown, count: count,
+      format: det.format,
+      error: count >= 8 ? null : '선수 프로필로 읽을 만한 능력치를 찾지 못했습니다.'
+    };
+  }
+
+  /*
    * ── 경기 통계 화면 읽기 ─────────────────────────────────────────────────
    *
    * FM 경기 통계 화면은 가운데가 항목명이고 좌우가 두 팀입니다.
@@ -726,8 +769,23 @@
     return { players: out, added: added, updated: updated, filled: filled };
   }
 
+  /*
+   * 지금 스쿼드에 있는데 이번에 가져온 파일에는 없는 선수.
+   * 방출·임대로 빠진 선수를 찾는 데 씁니다. 자동으로 지우지는 않습니다 —
+   * 능력치 묶음별로 나눠 내보낸 파일 하나만 넣어도 나머지가 전부 '없는 선수'가
+   * 되기 때문입니다. 판단은 화면에서 사람이 합니다.
+   */
+  function missingFrom(existing, incoming) {
+    var have = {};
+    (incoming || []).forEach(function (p) { have[p.name] = 1; });
+    return (existing || []).filter(function (p) { return !have[p.name]; })
+      .map(function (p) { return p.name; });
+  }
+
   root.FM_IMPORTER = {
     parseSquad: parseSquad,
+    parsePlayerProfile: parsePlayerProfile,
+    missingFrom: missingFrom,
     mergeSquad: mergeSquad,
     parseLineup: parseLineup,
     parseMatchStats: parseMatchStats,
