@@ -40,6 +40,11 @@
   reg('age', 'Age', '나이', '연령');
   reg('foot', 'Preferred Foot', '주발', '선호발', 'Foot', '주로 쓰는 발');
   reg('club', 'Club', '클럽', '소속팀');
+  // 컨디션은 부상이 아니라 피로도입니다 — 상대 선발의 약한 고리를 찾는 데 씁니다.
+  reg('condition', 'Condition', '컨디션', 'Cond');
+  // 부상·출장 정지 — 값이 있으면 지금 못 뛰는 선수로 봅니다.
+  reg('injury', 'Injury', '부상', '부상 상태', 'Expected Return Date', '예상 복귀일',
+    '복귀 예정일', '부상 정보', 'Suspension', '출장 정지');
 
   // 알고는 있지만 쓰지 않는 열. 이걸 등록해 두지 않으면 "무시한 열" 목록에
   // 매번 올라와 사용자가 매핑해야 할 열인지 아닌지 헷갈립니다.
@@ -497,6 +502,13 @@
         else if (field === 'age') { var age = parseInt(raw, 10); if (isFinite(age)) p.age = age; }
         else if (field === 'foot') p.foot = parseFoot(raw);
         else if (field === 'club') p.club = String(raw).trim();
+        else if (field === 'condition') p.condition = String(raw).trim();
+        else if (field === 'injury') {
+          var inj = String(raw).trim();
+          // 열이 있으면 비어 있다는 것도 정보입니다 — 비었으면 '뛸 수 있음'으로 봅니다.
+          p.out = !!(inj && inj !== '-' && inj !== '–');
+          if (p.out) p.outReason = inj.length > 12 ? '부상' : inj;
+        }
         else if (field.indexOf('attr:') === 0) {
           var v = parseAttrValue(raw);
           if (v !== null) { p.attrs[field.slice(5)] = v; filled++; }
@@ -522,6 +534,59 @@
         noPosition: players.filter(function (p) { return !p.positions.length; }).length,
         noAttrs: players.filter(function (p) { return !p.attrCount; }).length
       }
+    };
+  }
+
+  /*
+   * ── 경기 통계 화면 읽기 ─────────────────────────────────────────────────
+   *
+   * FM 경기 통계 화면은 가운데가 항목명이고 좌우가 두 팀입니다.
+   *     | 1 | 슈팅 수 | 10 |
+   *     | 43% | 점유율 | 57% |
+   * 어느 쪽이 우리 팀인지는 파일에 없으므로 양쪽을 그대로 돌려주고
+   * 화면에서 고르게 합니다 — 여기서 찍으면 조언이 통째로 반대가 됩니다.
+   */
+  var STAT_LOOKUP = null;
+  function statLookup() {
+    if (STAT_LOOKUP) return STAT_LOOKUP;
+    STAT_LOOKUP = {};
+    var TD = root.FM_TACTIC_DATA;
+    if (!TD) return STAT_LOOKUP;
+    TD.MATCH_STATS.forEach(function (m) {
+      m.aliases.forEach(function (a) { STAT_LOOKUP[norm(a)] = m.id; });
+      STAT_LOOKUP[norm(m.ko)] = m.id;
+    });
+    return STAT_LOOKUP;
+  }
+
+  // '90% (180/199)' → 90 · '43%' → 43 · '1.43' → 1.43 · '10' → 10
+  function parseStatValue(raw) {
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s || s === '-') return null;
+    var m = s.match(/-?\d+(?:\.\d+)?/);
+    return m ? parseFloat(m[0]) : null;
+  }
+
+  function parseMatchStats(text) {
+    var det = detectAndParse(text);
+    var look = statLookup();
+    var rows = [], unknown = [];
+    det.rows.forEach(function (row) {
+      var cells = row.map(function (c) { return String(c == null ? '' : c).trim(); })
+        .filter(function (c) { return c !== ''; });
+      if (cells.length !== 3) return;
+      var id = look[norm(cells[1])];
+      if (!id) { unknown.push(cells[1]); return; }
+      var left = parseStatValue(cells[0]), right = parseStatValue(cells[2]);
+      if (left === null && right === null) return;
+      rows.push({ id: id, label: cells[1], left: left, right: right });
+    });
+    var left = {}, right = {};
+    rows.forEach(function (r) { left[r.id] = r.left; right[r.id] = r.right; });
+    return {
+      rows: rows, left: left, right: right, unknown: unknown,
+      format: det.format,
+      error: rows.length ? null : '경기 통계 표를 찾지 못했습니다.'
     };
   }
 
@@ -558,19 +623,37 @@
     return null;
   }
 
+  /*
+   * 자리 목록만이 아니라 그 자리에 선 선수까지 읽습니다.
+   * 상대 선발에는 전술 자체보다 값싼 정보가 들어 있습니다 —
+   * 등록 포지션이 아닌 자리에 선 선수, 컨디션이 나쁜 선수가 어느 쪽인지.
+   */
   function parseLineup(text) {
     var det = detectAndParse(text);
-    var positions = [];
+    var head = resolveHeaders(det.rows);
+    var col = {};
+    if (head) {
+      Object.keys(head.map).forEach(function (j) { col[head.map[j]] = +j; });
+    }
+    var positions = [], slots = [];
     det.rows.forEach(function (row) {
       if (!row.length) return;
       var slot = slotFromName(row[0]);
       // 열 순서가 다른 내보내기를 대비해 앞쪽 두 칸까지 봅니다.
       if (!slot && row.length > 1) slot = slotFromName(row[1]);
-      if (slot) positions.push(slot);
+      if (!slot) return;
+      var name = col.name !== undefined ? cleanName(row[col.name]) : '';
+      slots.push({
+        pos: slot,
+        name: isPlaceholderName(name) ? null : name,
+        positions: col.position !== undefined ? parsePositions(row[col.position]) : [],
+        condition: col.condition !== undefined ? String(row[col.condition] || '').trim() : null
+      });
+      positions.push(slot);
     });
     // 11명을 넘어가면 교체 명단까지 읽은 것이므로 앞의 11개만 씁니다.
-    if (positions.length > 11) positions = positions.slice(0, 11);
-    return { positions: positions, format: det.format, matches: matchFormation(positions) };
+    if (positions.length > 11) { positions = positions.slice(0, 11); slots = slots.slice(0, 11); }
+    return { positions: positions, slots: slots, format: det.format, matches: matchFormation(positions) };
   }
 
   // 자리 구성이 같은 포메이션을 모두 찾습니다. 3-5-2와 5-3-2처럼 배치가 같고
@@ -632,6 +715,7 @@
         if (cur.quickAttrs) delete cur.quickAttrs[k];
       });
       // 비어 있는 값으로 이미 있는 값을 지우지 않습니다.
+      if (p.out !== undefined) { cur.out = p.out; cur.outReason = p.outReason; }
       if (p.positions && p.positions.length) cur.positions = p.positions;
       if (p.foot && p.foot !== 'B') cur.foot = p.foot;
       if (p.age) cur.age = p.age;
@@ -646,6 +730,8 @@
     parseSquad: parseSquad,
     mergeSquad: mergeSquad,
     parseLineup: parseLineup,
+    parseMatchStats: parseMatchStats,
+    parseStatValue: parseStatValue,
     matchFormation: matchFormation,
     slotFromName: slotFromName,
     cleanName: cleanName,

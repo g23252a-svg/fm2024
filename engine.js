@@ -30,6 +30,53 @@
   }
   function round1(v) { return Math.round(v * 10) / 10; }
 
+  /*
+   * 한글 조사 고르기.
+   *
+   * 포메이션·지시 이름을 문장에 그대로 끼우면 "크리스마스 트리으로"처럼 나옵니다.
+   * 받침 유무로 갈리는데, 이름 끝이 숫자나 로마자인 경우가 많아
+   * (4-4-2 · 5-3-2 WB · 4-1-4-1 DM) 그것들의 한글 읽기까지 봅니다.
+   */
+  var DIGIT_JONG = { '0': 'ㅇ', '1': 'ㄹ', '2': '', '3': 'ㅁ', '4': '', '5': '', '6': 'ㄱ', '7': 'ㄹ', '8': 'ㄹ', '9': '' };
+  var LATIN_JONG = {
+    A: '', B: '', C: '', D: '', E: '', F: 'ㅍ', G: '', H: 'ㅣ', I: '', J: '', K: '', L: 'ㄹ',
+    M: 'ㅁ', N: 'ㄴ', O: '', P: '', Q: '', R: 'ㄹ', S: 'ㅅ', T: '', U: '', V: '', W: 'ㅜ', X: 'ㅅ', Y: '', Z: ''
+  };
+  function finalConsonant(word) {
+    var s = String(word == null ? '' : word).trim();
+    // 괄호·공백을 걷어내고 마지막 의미 있는 글자를 봅니다.
+    s = s.replace(/[)\]\s]+$/, '');
+    if (!s) return null;
+    var c = s.charAt(s.length - 1);
+    var code = c.charCodeAt(0);
+    if (code >= 0xAC00 && code <= 0xD7A3) {
+      var jong = (code - 0xAC00) % 28;
+      return jong === 0 ? '' : (jong === 8 ? 'ㄹ' : 'X');
+    }
+    if (DIGIT_JONG[c] !== undefined) return DIGIT_JONG[c] || '';
+    var upper = c.toUpperCase();
+    if (LATIN_JONG[upper] !== undefined) return LATIN_JONG[upper] === 'ㄹ' ? 'ㄹ' : (LATIN_JONG[upper] ? 'X' : '');
+    return null;
+  }
+  // '로/으로' — 받침이 없거나 ㄹ이면 '로'.
+  function ro(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '으로';
+    return (f === '' || f === 'ㄹ') ? '로' : '으로';
+  }
+  // '을/를' — 받침이 있으면 '을'.
+  function eul(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '을';
+    return f === '' ? '를' : '을';
+  }
+  // '이/가'
+  function iga(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '이';
+    return f === '' ? '가' : '이';
+  }
+
   // 포지션 인접표 — 등록되지 않은 포지션이라도 여기 연결돼 있으면 부분 점수를 줍니다.
   var ADJACENT = {
     GK: {},
@@ -347,6 +394,51 @@
       var mean = avg(stam.map(function (p) { return at(p, 'sta'); }));
       if (mean < 12) add('low-stamina', '스쿼드 평균 지구력이 ' + round1(mean) + '입니다.', stam);
     }
+    return out;
+  }
+
+  /*
+   * 상대 선발에서 읽히는 약한 고리.
+   *
+   * 전술 화면 내보내기에는 능력치가 없지만, 그보다 값싼 정보가 있습니다 —
+   * 등록 포지션이 아닌 자리에 선 선수와 컨디션이 나쁜 선수. 둘 다 "어느 쪽을
+   * 노릴지"를 바로 알려 줍니다.
+   */
+  var POOR_CONDITION = /나쁨|저조|지침|Poor|Jaded|Tired/i;
+  var OPP_SIDE = {
+    DR: '왼쪽', WBR: '왼쪽', MR: '왼쪽', AMR: '왼쪽',
+    DL: '오른쪽', WBL: '오른쪽', ML: '오른쪽', AML: '오른쪽'
+  };
+
+  // 상대 기준 왼쪽이 약하면 'weak-flank-l' — 우리는 오른쪽을 공략합니다.
+  var SIDE_TO_TRAIT = { DR: 'weak-flank-r', WBR: 'weak-flank-r', MR: 'weak-flank-r', AMR: 'weak-flank-r',
+    DL: 'weak-flank-l', WBL: 'weak-flank-l', ML: 'weak-flank-l', AML: 'weak-flank-l' };
+
+  function opponentLineupNotes(slots) {
+    var out = [];
+    (slots || []).forEach(function (s) {
+      if (!s.name) return;
+      var ourSide = OPP_SIDE[s.pos];
+      if (s.positions && s.positions.length && s.positions.indexOf(s.pos) < 0) {
+        out.push({
+          kind: 'out-of-position', trait: SIDE_TO_TRAIT[s.pos] || null,
+          text: s.name + iga(s.name) + ' ' + posKo(s.pos) + '에 서는데 등록 포지션은 '
+            + s.positions.join(' · ') + '입니다.',
+          action: ourSide
+            ? ('그 자리는 수비 가담이 약할 수 있습니다 — 우리 ' + ourSide + ' 측면을 밀어 보세요.')
+            : '익숙하지 않은 자리라 위치 선정이 흔들릴 수 있습니다.'
+        });
+      }
+      if (s.condition && POOR_CONDITION.test(s.condition)) {
+        out.push({
+          kind: 'condition', trait: SIDE_TO_TRAIT[s.pos] || null,
+          text: s.name + '(' + posKo(s.pos) + ')의 컨디션이 ' + s.condition + '입니다.',
+          action: ourSide
+            ? ('우리 ' + ourSide + ' 측면에서 반복해서 달리게 만드세요 — 후반에 먼저 무너집니다.')
+            : '경기가 진행될수록 그 자리가 먼저 벌어집니다.'
+        });
+      }
+    });
     return out;
   }
 
@@ -1295,6 +1387,20 @@
   }
 
   /*
+   * 지금 뛸 수 없는 선수를 뺍니다.
+   * 부상·출장 정지 선수를 선발에 넣으면 그 전술은 이번 주말에 못 씁니다.
+   * 스쿼드 목록에서는 지우지 않고 여기서만 빼서, 복귀하면 그대로 돌아오게 합니다.
+   */
+  function splitAvailable(players) {
+    var out = [], avail = [];
+    players.forEach(function (p) {
+      if (p.out) out.push({ name: p.name, reason: p.outReason || '이탈' });
+      else avail.push(p);
+    });
+    return { available: avail, unavailable: out };
+  }
+
+  /*
    * ── 시즌 기본 전술 ──────────────────────────────────────────────────────
    *
    * 상대를 보지 않고 스쿼드만으로 고르는 전술입니다. 매 경기 새로 짜는 대신
@@ -1389,6 +1495,8 @@
       c.attrs = p.attrs || {};
       return c;
     });
+    var split = splitAvailable(players);
+    players = split.available;
     if (players.length < 7) return null;
 
     var squad = summariseSquad(players);
@@ -1457,6 +1565,7 @@
       squad: squad,
       xiSquad: xiSquad,
       standing: standing,
+      unavailable: split.unavailable,
       plan: planTop[0],
       formation: best.formation,
       xi: best.xi,
@@ -1478,6 +1587,281 @@
     };
   }
 
+  /*
+   * ── 영입이 필요한 자리 ──────────────────────────────────────────────────
+   *
+   * 기본 전술을 기준으로 스쿼드를 봅니다. "어느 포지션에 선수가 몇 명 있나"만
+   * 세면 쓸모가 없습니다 — 이름만 그 자리인 선수가 셋 있어도 전술이 요구하는
+   * 역할을 못 하면 없는 것과 같기 때문입니다. 그래서 기본 전술이 그 자리에
+   * 요구하는 역할을 기준으로, 지금 최고인 선수가 그 역할의 요구치를 넘는지까지 봅니다.
+   *
+   * 원하는 선수 유형도 같은 이유로 "좋은 센터백"이 아니라 그 역할의 요구 능력치와
+   * 지금 부족한 값으로 적습니다. 스카우트 필터에 그대로 옮길 수 있어야 쓸모가 있습니다.
+   */
+  var SIDE_KO = { DR: '오른쪽', WBR: '오른쪽', MR: '오른쪽', AMR: '오른쪽',
+    DL: '왼쪽', WBL: '왼쪽', ML: '왼쪽', AML: '왼쪽' };
+
+  function wantedFoot(role, pos) {
+    var tags = role.tags || [];
+    var side = pos.indexOf('R') >= 0 ? 'r' : (pos.indexOf('L') >= 0 && pos !== 'GK' ? 'l' : null);
+    if (!side) return null;
+    if (tags.indexOf('inverted') >= 0 || tags.indexOf('narrow-drift') >= 0) {
+      return side === 'r' ? '왼발' : '오른발';
+    }
+    if (tags.indexOf('crosser') >= 0) return side === 'r' ? '오른발' : '왼발';
+    return null;
+  }
+
+  function squadNeeds(input) {
+    var base = input.base || baseTactic(input);
+    if (!base) return null;
+    var players = splitAvailable((input.players || []).map(function (p, i) {
+      var c = Object.assign({}, p);
+      c._id = p.id || ('p' + i);
+      c.positions = p.positions || [];
+      c.attrs = p.attrs || {};
+      return c;
+    })).available;
+
+    var slotCount = {};
+    base.formation.slots.forEach(function (s) { slotCount[s.pos] = (slotCount[s.pos] || 0) + 1; });
+
+    // 포지션별로 한 번씩만 봅니다 — 센터백 두 자리를 따로 적으면 같은 말이 두 번 나옵니다.
+    var seen = {}, needs = [], surplus = [];
+    base.xi.lineup.forEach(function (l, i) {
+      var pos = l.slot.pos;
+      if (seen[pos]) return;
+      seen[pos] = 1;
+
+      var naturals = players.filter(function (p) { return p.positions.indexOf(pos) >= 0; });
+      var need = slotCount[pos];
+      var starter = l.player, starterFit = l.fit;
+      var back = base.bench[i] || {};
+
+      /*
+       * 이 자리를 볼 수 있는 선수들의 능력치 최고값. 무엇이 모자란지 보려면
+       * 지금 팀에서 가장 나은 값과 비교해야 합니다.
+       *
+       * 등록 선수가 없을 때 스쿼드 전체를 기준으로 삼으면 안 됩니다 —
+       * 오른쪽 풀백을 구하는데 센터백의 마크 16을 보고 "마크 17 이상"을 요구하게
+       * 됩니다. 그 자리를 볼 수 있는 사람이 아무도 없으면 기준도 없는 것입니다.
+       */
+      var refPool = naturals.length ? naturals
+        : players.filter(function (p) { return positionFamiliarity(p, pos) >= 0.6; });
+      function bestAttr(id) {
+        var vals = refPool.map(function (p) {
+          var v = p.attrs[id];
+          return typeof v === 'number' && v > 0 ? v : null;
+        }).filter(function (v) { return v !== null; });
+        return vals.length ? Math.max.apply(null, vals) : null;
+      }
+      // 그 자리를 볼 수 있는 선수가 아예 없을 때의 기준. 스쿼드의 일반적인 수준을
+      // 씁니다 — 최고값을 쓰면 전문가 한 명(센터백의 마크)이 기준이 되어,
+      // 오른쪽 풀백에게 마크 17을 요구하는 식이 됩니다.
+      function levelAttr(id) {
+        var vals = players.map(function (p) {
+          var v = p.attrs[id];
+          return typeof v === 'number' && v > 0 ? v : null;
+        }).filter(function (v) { return v !== null; }).sort(function (x, y) { return x - y; });
+        return vals.length ? vals[Math.floor(vals.length / 2)] : null;
+      }
+
+      var req = l.role.req || {};
+      var wantAttrs = Object.keys(req).map(function (id) {
+        return { id: id, ko: RD.ATTRS[id].ko, need: req[id], best: bestAttr(id), level: levelAttr(id) };
+      });
+      // 요구치가 없는 역할은 강조 능력치 앞쪽을 대신 씁니다.
+      if (!wantAttrs.length) {
+        wantAttrs = l.role.key.slice(0, 4).map(function (id) {
+          return { id: id, ko: RD.ATTRS[id].ko, need: null, best: bestAttr(id), level: levelAttr(id) };
+        });
+      }
+      var short = wantAttrs.filter(function (a) { return a.need && a.best !== null && a.best < a.need; });
+
+      // 그 자리에 선 선수가 원래 그 자리 선수인지 — 아니면 급한 대로 메운 것입니다.
+      var starterNatural = !!(starter && starter.positions.indexOf(pos) >= 0);
+
+      var severity = null, reason = '';
+      if (!naturals.length) {
+        severity = 'critical';
+        reason = starter
+          ? ('이 자리에 등록된 선수가 없어 ' + starter.name + iga(starter.name) + ' 임시로 서 있습니다(적합도 ' + starterFit + ').')
+          : '이 자리에 등록된 선수가 한 명도 없습니다.';
+      } else if (!starterNatural) {
+        severity = 'critical';
+        reason = '등록 선수가 ' + naturals.length + '명 있지만 다른 자리에 쓰이고 있어, 지금은 이 자리가 아닌 선수가 서 있습니다.';
+      } else if (starterFit !== null && starterFit < 55) {
+        severity = 'critical';
+        reason = '주전 적합도가 ' + starterFit + '입니다 — 이 역할을 수행할 선수가 사실상 없습니다.';
+      } else if (short.length) {
+        severity = 'high';
+        reason = '이 자리에서 가장 나은 선수도 ' + l.role.ko + ' 요구치를 못 넘습니다.';
+      } else if (naturals.length <= need) {
+        severity = 'high';
+        reason = need > 1
+          ? ('선발 ' + need + '자리를 ' + naturals.length + '명이 채우고 있어 백업이 없습니다.')
+          : '백업이 없습니다 — 부상이나 경고 누적이면 이 자리가 비어 버립니다.';
+      } else if (!back.player) {
+        severity = 'high';
+        // 등록 선수는 남는데 백업이 비었다면, 그 선수가 다른 빈 자리를 메우고 있는 것입니다.
+        reason = '등록 선수는 ' + naturals.length + '명이지만 남는 선수가 다른 빈 자리를 메우고 있어, 이 자리에 백업이 없습니다.';
+      } else if (back.fit !== null && back.fit < 50) {
+        severity = 'high';
+        reason = '백업 적합도가 ' + back.fit + '입니다 — 로테이션에 쓰기 어렵습니다.';
+      } else if (back.fit < 58) {
+        severity = 'mid';
+        reason = '백업 적합도가 ' + back.fit + '이라 주전과 차이가 큽니다.';
+      }
+
+      if (naturals.length >= need + 3) {
+        surplus.push({ pos: pos, ko: posKo(pos), count: naturals.length, need: need });
+      }
+      if (!severity) return;
+
+      /*
+       * 목표치는 왜 필요한 영입인지에 따라 달라집니다.
+       * 주전이 없거나 못 뛰는 자리는 지금보다 나은 선수가 필요하고,
+       * 백업이 없는 자리는 주전만큼일 필요 없이 비슷한 수준이면 됩니다.
+       * 둘을 같은 값으로 적으면 "3번째 센터백에게 팀 최고보다 높은 마크"를 요구하게 됩니다.
+       */
+      var upgrade = severity === 'critical';
+      wantAttrs.forEach(function (a) {
+        if (a.need) { a.target = a.need; a.targetKind = 'req'; return; }
+        if (!naturals.length) {
+          // 비교할 선수가 없으니 스쿼드 일반 수준보다 한 단계 위를 적습니다.
+          a.target = a.level === null ? null : Math.min(20, Math.max(12, a.level + 1));
+          a.targetKind = 'level';
+          return;
+        }
+        if (a.best === null) { a.target = null; a.targetKind = null; return; }
+        a.target = upgrade ? Math.min(20, a.best + 1) : Math.max(11, a.best - 1);
+        a.targetKind = upgrade ? 'upgrade' : 'depth';
+      });
+
+      var foot = wantedFoot(l.role, pos);
+      var sideKo = SIDE_KO[pos] || '';
+      needs.push({
+        pos: pos, ko: posKo(pos), severity: severity, reason: reason,
+        role: { id: l.role.id, ko: l.role.ko, abbr: l.role.abbr }, duty: l.duty,
+        starter: starter ? { name: starter.name, fit: starterFit, natural: starterNatural } : null,
+        backup: back.player ? { name: back.player.name, fit: back.fit } : null,
+        naturalCount: naturals.length, slots: need,
+        wantAttrs: wantAttrs, shortAttrs: short, foot: foot,
+        profile: (sideKo ? sideKo + ' ' : '') + l.role.ko
+          + (foot ? ' · ' + foot : '')
+          + ' — ' + wantAttrs.map(function (a) {
+            // "좋은 센터백"은 스카우트 필터에 넣을 수 없습니다. 숫자로 적습니다.
+            return a.ko + (a.target ? ' ' + a.target + '↑' : '');
+          }).join(' · ')
+      });
+    });
+
+    // 영입이 필요하다고 적은 자리를 '남는 자리'에도 올리면 서로 어긋나 보입니다.
+    // 등록 인원은 많은데 쓸 만한 백업이 없는 경우가 그렇고, 그건 영입 쪽 이야기입니다.
+    var needPos = {};
+    needs.forEach(function (n) { needPos[n.pos] = 1; });
+    surplus = surplus.filter(function (x) { return !needPos[x.pos]; });
+
+    var order = { critical: 0, high: 1, mid: 2 };
+    needs.sort(function (a, b) {
+      if (order[a.severity] !== order[b.severity]) return order[a.severity] - order[b.severity];
+      return b.shortAttrs.length - a.shortAttrs.length;
+    });
+
+    // 팀 전체 관점 — 자리별로는 안 보이는 구멍.
+    var team = [];
+    var s = base.xiSquad;
+    var plan = base.plan.id;
+    var hasAerial = base.xi.lineup.some(function (l) {
+      var a = (l.player && l.player.attrs) || {};
+      return ['ST', 'AMC'].indexOf(l.slot.pos) >= 0 && (a.hea || 0) >= 14 && (a.jum || 0) >= 14;
+    });
+    if ((plan === 'wide-cross') && !hasAerial) {
+      team.push('전술 방향이 측면·크로스인데 박스 안에서 헤딩으로 받아 줄 선수가 없습니다 — 제공권 있는 최전방이 이 스쿼드의 가장 큰 구멍입니다.');
+    }
+    if (plan === 'press-high' && s.stamina > 0 && s.stamina < 13) {
+      team.push('전방 압박을 기본으로 두려면 스태미너·활동량이 받쳐 줘야 합니다(현재 평균 ' + s.stamina + '). 중원과 최전방에 체력형 자원이 필요합니다.');
+    }
+    if (plan === 'possession' && s.technique > 0 && s.technique < 12) {
+      team.push('점유를 기본으로 두기에는 팀 기술 평균이 ' + s.technique + '로 낮습니다 — 후방과 중원의 패스·퍼스트 터치를 올릴 영입이 먼저입니다.');
+    }
+    if (s.pace > 0 && s.pace < 12) {
+      team.push('앞선 평균 속도가 ' + s.pace + '입니다 — 뒷공간을 노리는 경기 방식 자체가 막혀 있어, 상대가 라인을 올려도 벌줄 방법이 없습니다.');
+    }
+    if (base.depthCovered < 6) {
+      team.push('선발 11자리 중 백업이 있는 자리가 ' + base.depthCovered + '곳뿐입니다 — 시즌을 치르려면 폭 자체가 부족합니다.');
+    }
+
+    return { needs: needs, surplus: surplus, team: team, base: base,
+      unavailable: base.unavailable || [] };
+  }
+
+  function posKo(pos) {
+    var p = RD.POSITIONS.filter(function (x) { return x.id === pos; })[0];
+    return p ? p.ko : pos;
+  }
+
+  /*
+   * ── 경기 중 조정 ────────────────────────────────────────────────────────
+   *
+   * 시간대 · 점수 · 상황 · 전반 기록을 받아 무엇을 건드릴지 냅니다.
+   *
+   * 없는 값은 NaN으로 둡니다. null로 두면 `null <= 42`가 참이 되어,
+   * 점유율을 모르는 경기에서 "밀리고 있습니다"가 튀어나옵니다.
+   */
+  function normStats(o) {
+    var out = {};
+    TD.MATCH_STATS.forEach(function (m) {
+      var v = o ? o[m.id] : undefined;
+      out[m.id] = (typeof v === 'number' && isFinite(v)) ? v : NaN;
+    });
+    return out;
+  }
+
+  function inMatchAdvice(input) {
+    input = input || {};
+    var phase = TD.MATCH_PHASES.filter(function (p) { return p.id === input.phase; })[0]
+      || TD.MATCH_PHASES[2];
+    var gf = numOr(input.goalsFor, 0), ga = numOr(input.goalsAgainst, 0);
+    var flags = input.flags || [];
+    var hasStats = !!(input.stats && input.stats.us && input.stats.them);
+    var us = normStats(hasStats ? input.stats.us : null);
+    var them = normStats(hasStats ? input.stats.them : null);
+
+    var c = {
+      phase: phase.id, phaseIdx: phase.idx,
+      diff: gf - ga, gf: gf, ga: ga,
+      flag: function (id) { return flags.indexOf(id) >= 0; },
+      s: hasStats, us: us, them: them
+    };
+
+    var fired = [];
+    TD.INMATCH_RULES.forEach(function (rule) {
+      var ok;
+      try { ok = rule.when(c); } catch (e) { ok = false; }
+      if (!ok) return;
+      fired.push({
+        id: rule.id, tier: rule.tier, group: rule.group,
+        why: typeof rule.why === 'function' ? rule.why(c) : rule.why,
+        items: rule.items
+      });
+    });
+    // 「바꾸지 마세요」가 있으면 맨 위에 둡니다 — 다른 항목을 먼저 읽고 손대면
+    // 그 조언은 이미 늦습니다.
+    var weight = function (f) {
+      var hold = f.items.some(function (i) { return i.kind === 'hold'; });
+      return (f.tier === 'key' ? 0 : 10) + (hold ? -1 : 0);
+    };
+    fired.sort(function (a, b) { return weight(a) - weight(b); });
+
+    return {
+      phase: phase, score: { gf: gf, ga: ga, diff: gf - ga },
+      flags: flags, hasStats: hasStats,
+      stats: hasStats ? { us: us, them: them } : null,
+      fired: fired
+    };
+  }
+
   // ── 최상위 진입점 ─────────────────────────────────────────────────────
   function generate(input) {
     var players = (input.players || []).map(function (p, i) {
@@ -1490,6 +1874,9 @@
     var opp = normaliseOpponent(input.opponent);
     var ctx = normaliseContext(input.context);
     var oppF = opp.formationId ? FORMATION_BY_ID[opp.formationId] : null;
+
+    var split = splitAvailable(players);
+    players = split.available;
 
     var squad = summariseSquad(players);
     var ranked = rankFormations(players, opp, ctx, squad, oppF, input.allowedFormations);
@@ -1514,6 +1901,9 @@
     return {
       squad: squad,
       xiSquad: xiSquad,
+      unavailable: split.unavailable,
+      // 이 경기에 쓸 교체 자원 — 주전을 빼고 남은 선수로 같은 자리를 채워 봅니다.
+      bench: benchFor(players, xi),
       opponent: opp,
       opponentFormation: oppF,
       context: ctx,
@@ -1536,8 +1926,13 @@
   }
 
   root.FM_ENGINE = {
+    opponentLineupNotes: opponentLineupNotes,
+    inMatchAdvice: inMatchAdvice,
+    splitAvailable: splitAvailable,
+    josa: { ro: ro, eul: eul, iga: iga },
     generate: generate,
     baseTactic: baseTactic,
+    squadNeeds: squadNeeds,
     benchFor: benchFor,
     inferOpponentTraits: inferOpponentTraits,
     roleFit: roleFit,

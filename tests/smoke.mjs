@@ -182,11 +182,9 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
 // 포메이션 이름을 문장에 그대로 끼우면 "크리스마스 트리으로"가 된다.
 // 이름 끝이 숫자나 로마자인 경우가 많아(4-4-2 · 5-3-2 WB · 4-1-4-1 DM) 같이 본다.
 {
-  const src = inline[0];
-  const sandbox = { window: {}, document: undefined };
-  // index.html의 조사 함수만 떼어 내 확인한다 (전체를 실행하면 DOM이 필요하다)
-  const roSrc = src.slice(src.indexOf('var DIGIT_JONG'), src.indexOf('function quickCount'));
-  const ro = new Function(roSrc + '\nreturn { ro: ro, eul: eul };')();
+  // 조사 함수는 engine.js에 있다 — 결과 문장을 UI와 엔진이 함께 만들기 때문이다.
+  const ro = E.josa;
+  assert.ok(ro && ro.ro && ro.eul && ro.iga, 'engine이 조사 함수를 내보내지 않는다');
   const cases = [
     ['4-3-2-1 크리스마스 트리', '로'],
     ['4-2-3-1 와이드', '로'],      // '드'는 받침이 없다
@@ -205,13 +203,14 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   assert.equal(ro.eul('트리'), '를');
   assert.equal(ro.eul('와이드'), '를');
   assert.equal(ro.eul('균형'), '을');
+  assert.equal(ro.iga('트리'), '가');
+  assert.equal(ro.iga('균형'), '이');
 
   // 실제 포메이션 이름 전부에 대해 조사가 나와야 한다 (null/undefined 금지)
   for (const f of FD.FORMATIONS) {
     const j = ro.ro(f.ko);
     assert.ok(j === '로' || j === '으로', `${f.ko}의 조사가 이상하다: ${j}`);
   }
-  void sandbox;
 }
 
 // ── 헝가리안 알고리즘 ─────────────────────────────────────────────────────
@@ -443,6 +442,45 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   assert.ok(lineup.matches.includes('433dm'),
     `포메이션을 4-3-3 DM 와이드로 알아보지 못했다: ${lineup.matches.join(', ')}`);
 
+  /*
+   * 선수가 배정된 전술 화면에서는 선발 명단까지 읽어야 한다.
+   * 능력치가 없어도 "자리에 안 맞는 선수"와 "컨디션이 나쁜 선수"는 읽히고,
+   * 둘 다 어느 측면을 노릴지 바로 알려 준다.
+   */
+  {
+    const filled = IMP.parseLineup(fx('ko-tactic-lineup-filled.html'));
+    assert.ok(filled.matches.includes('433dm'), `포메이션 인식 실패: ${filled.matches.join(', ')}`);
+    assert.equal(filled.slots.length, 11, `선발을 ${filled.slots.length}명 읽었다`);
+    const named = filled.slots.filter((s) => s.name);
+    assert.equal(named.length, 11, '선발 이름을 다 읽지 못했다');
+    assert.ok(!named.some((s) => /선수\s*선발/.test(s.name)), "이름에 '- 선수 선발'이 남아 있다");
+    const gk = filled.slots[0];
+    assert.equal(gk.pos, 'GK');
+    assert.deepEqual([...gk.positions], ['GK']);
+    assert.ok(gk.condition, '컨디션을 읽지 못했다');
+
+    const notes = E.opponentLineupNotes(filled.slots);
+    assert.ok(notes.length >= 2, `약한 고리를 ${notes.length}개만 찾았다`);
+    assert.ok(notes.some((n) => n.kind === 'out-of-position'),
+      '등록 포지션이 아닌 자리에 선 선수를 못 찾았다');
+    assert.ok(notes.some((n) => n.kind === 'condition'),
+      '컨디션이 나쁜 선수를 못 찾았다');
+    for (const n of notes) {
+      assert.ok(n.text && n.action, '약한 고리에 이유나 행동이 빠졌다');
+      assert.ok(!/이\(가\)/.test(n.text), `조사가 '이(가)'로 남아 있다: ${n.text}`);
+      if (n.trait) assert.ok(TRAIT_IDS.has(n.trait), `알 수 없는 성향 ${n.trait}`);
+    }
+    // 상대 오른쪽(우리 왼쪽)이 약하면 'weak-flank-r'이어야 한다
+    const rafferty = notes.find((n) => /Rafferty/.test(n.text));
+    assert.ok(rafferty, '컨디션 나쁜 오른쪽 수비수를 못 찾았다');
+    assert.equal(rafferty.trait, 'weak-flank-r');
+    assert.ok(/왼쪽/.test(rafferty.action), '우리가 어느 쪽을 노릴지 반대로 적었다');
+
+    // 선수가 배정되지 않은 파일에서는 약한 고리가 나오면 안 된다
+    assert.equal(E.opponentLineupNotes(IMP.parseLineup(fx('ko-tactic-lineup.html')).slots).length, 0,
+      '선수가 없는 전술 화면에서 약점을 지어냈다');
+  }
+
   // 같은 파일에서 상대 스쿼드도 읽힌다 — 이름의 화면 조작 문구가 지워져야 한다
   const oppSquad = IMP.parseSquad(fx('ko-tactic-lineup.html'));
   assert.ok(oppSquad.players.length >= 20, `상대 스쿼드를 ${oppSquad.players.length}명만 읽었다`);
@@ -655,6 +693,115 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(strip(a), strip(b), '같은 입력에서 다른 결과가 나왔다');
 }
 
+// ── 경기 통계 읽기 · 경기 중 조정 ─────────────────────────────────────────
+{
+  const KINDS = new Set(['hold', 'axis', 'toggle', 'shape', 'sub']);
+  const ruleIds2 = new Set();
+  for (const r of TD.INMATCH_RULES) {
+    assert.ok(!ruleIds2.has(r.id), `경기 중 규칙 id 중복: ${r.id}`);
+    ruleIds2.add(r.id);
+    assert.equal(typeof r.when, 'function', `${r.id}의 when이 함수가 아니다`);
+    assert.ok(r.why, `${r.id}에 이유가 없다`);
+    assert.ok(['key', 'normal'].includes(r.tier), `${r.id}의 tier가 이상하다`);
+    assert.ok(r.items.length, `${r.id}에 항목이 없다`);
+    for (const i of r.items) {
+      assert.ok(KINDS.has(i.kind), `${r.id}의 알 수 없는 종류 ${i.kind}`);
+      assert.ok(i.text && i.text.length > 4, `${r.id}에 내용이 빈 항목이 있다`);
+    }
+  }
+
+  // 실제 FM 경기 통계 파일
+  const st = IMP.parseMatchStats(read(path.join('tests/fixtures', 'ko-match-stats.html')));
+  assert.equal(st.error, null, `경기 통계를 읽지 못했다: ${st.error}`);
+  assert.equal(st.rows.length, 8, `항목 ${st.rows.length}개만 읽었다`);
+  assert.equal(st.unknown.length, 0, `못 읽은 항목: ${st.unknown.join(', ')}`);
+  assert.equal(st.right.shots, 10);
+  assert.equal(st.right.xg, 1.43);
+  assert.equal(st.right.possession, 57);
+  assert.equal(st.left.possession, 43);
+  // '90% (180/199)' 같은 값에서 앞의 백분율만 읽어야 한다
+  assert.equal(st.left.passPct, 90);
+  assert.equal(st.right.passPct, 93);
+  assert.equal(IMP.parseStatValue('90% (180/199)'), 90);
+  assert.equal(IMP.parseStatValue('1.43'), 1.43);
+  assert.equal(IMP.parseStatValue('-'), null);
+
+  /*
+   * 기대 득점은 쌓이는데 골이 없을 때 "바꾸지 마세요"가 나와야 하고,
+   * 그 항목이 맨 위에 와야 한다. 아래를 먼저 읽고 손대면 이미 늦다.
+   */
+  const halfTime = E.inMatchAdvice({
+    phase: 'half-time', goalsFor: 0, goalsAgainst: 0,
+    stats: { us: st.right, them: st.left }
+  });
+  assert.ok(halfTime.hasStats);
+  const ids = halfTime.fired.map((f) => f.id);
+  assert.ok(ids.includes('stat-unlucky'), `기대 득점 1.43 · 0골인데 유지 조언이 없다: ${ids.join(', ')}`);
+  assert.equal(ids[0], 'stat-unlucky', `유지 조언이 맨 위가 아니다: ${ids.join(', ')}`);
+
+  // 우리 팀을 반대로 고르면 조언도 반대가 되어야 한다
+  const flipped = E.inMatchAdvice({
+    phase: 'half-time', goalsFor: 0, goalsAgainst: 0,
+    stats: { us: st.left, them: st.right }
+  });
+  const fIds = flipped.fired.map((f) => f.id);
+  assert.ok(fIds.includes('stat-opp-xg'), `반대로 골랐는데 실점 위험 경고가 없다: ${fIds.join(', ')}`);
+  assert.ok(!fIds.includes('stat-unlucky'), '반대로 골랐는데 유지 조언이 그대로다');
+
+  /*
+   * 모르는 값으로 없는 진단을 만들면 안 된다.
+   * null로 두면 `null <= 42`가 참이 되어 점유율을 모르는 경기에서
+   * "밀리고 있습니다"가 튀어나온다.
+   */
+  const sparse = E.inMatchAdvice({
+    phase: 'half-time', goalsFor: 0, goalsAgainst: 0,
+    stats: { us: { shots: 5 }, them: { shots: 4 } }
+  });
+  const sIds = sparse.fired.map((f) => f.id);
+  for (const bogus of ['stat-dominated', 'stat-no-shots', 'stat-parked-detected', 'stat-pass-low']) {
+    assert.ok(!sIds.includes(bogus), `값이 없는데 '${bogus}'가 발동했다`);
+  }
+
+  // 시간대·점수에 따라 갈리는가
+  const lead2Half = E.inMatchAdvice({ phase: 'half-time', goalsFor: 2, goalsAgainst: 0 });
+  assert.ok(lead2Half.fired.some((f) => f.id === 'lead2-halftime'));
+  assert.ok(lead2Half.fired[0].items.some((i) => i.kind === 'hold'),
+    '두 골 앞선 하프타임인데 "지금 내리지 마세요"가 없다');
+  const lead2Late = E.inMatchAdvice({ phase: 'second-late', goalsFor: 2, goalsAgainst: 0 });
+  assert.ok(lead2Late.fired.some((f) => f.id === 'lead2-late'));
+  assert.ok(!lead2Late.fired.some((f) => f.id === 'lead2-halftime'),
+    '75분인데 하프타임 조언이 나왔다');
+  const down1Half = E.inMatchAdvice({ phase: 'half-time', goalsFor: 0, goalsAgainst: 1 });
+  assert.ok(down1Half.fired.some((f) => f.id === 'down1-halftime'));
+  const down1Late = E.inMatchAdvice({ phase: 'second-late', goalsFor: 0, goalsAgainst: 1 });
+  assert.ok(down1Late.fired.some((f) => f.id === 'down1-late'));
+  assert.ok(!down1Late.fired.some((f) => f.id === 'down1-halftime'));
+
+  // 상황 표시가 반영되는가
+  const red = E.inMatchAdvice({ phase: 'second-early', goalsFor: 0, goalsAgainst: 0, flags: ['red-us'] });
+  assert.ok(red.fired.some((f) => f.id === 'red-us'));
+  const noFlag = E.inMatchAdvice({ phase: 'second-early', goalsFor: 0, goalsAgainst: 0, flags: [] });
+  assert.ok(!noFlag.fired.some((f) => f.id === 'red-us'));
+
+  // 아무 정보가 없어도 죽지 않는다
+  const empty = E.inMatchAdvice({});
+  assert.ok(empty.phase && empty.score, '빈 입력에서 형식이 깨졌다');
+
+  // 모든 시간대 × 점수 조합에서 죽지 않고, why가 비지 않는다
+  for (const ph of TD.MATCH_PHASES) {
+    for (let d = -3; d <= 3; d++) {
+      const r = E.inMatchAdvice({
+        phase: ph.id, goalsFor: Math.max(0, d), goalsAgainst: Math.max(0, -d),
+        stats: { us: st.right, them: st.left }
+      });
+      for (const f of r.fired) {
+        assert.ok(f.why && f.why.length > 4, `${ph.id}/${d}: ${f.id}의 이유가 비었다`);
+        assert.ok(!/NaN|undefined/.test(f.why), `${ph.id}/${d}: ${f.id}의 이유에 NaN/undefined가 들어갔다 — ${f.why}`);
+      }
+    }
+  }
+}
+
 // ── 시즌 기본 전술 (상대 없이 스쿼드만으로) ───────────────────────────────
 {
   const base = E.baseTactic({ players: squad, standing: 'mid' });
@@ -728,6 +875,83 @@ function run(opponent = {}, context = {}, players = squad) {
         `위치 '${st}'에 전술 방향 ${pid}의 보정이 없다`);
     }
   }
+}
+
+// ── 영입이 필요한 자리 ────────────────────────────────────────────────────
+{
+  const rep = E.squadNeeds({ players: squad, standing: 'mid' });
+  assert.ok(rep && rep.base, 'squadNeeds가 아무것도 내놓지 않았다');
+  const SEVS = new Set(['critical', 'high', 'mid']);
+  for (const n of rep.needs) {
+    assert.ok(SEVS.has(n.severity), `알 수 없는 심각도 ${n.severity}`);
+    assert.ok(n.reason && n.reason.length > 5, `${n.ko}에 이유가 없다`);
+    assert.ok(n.profile && n.profile.length > 5, `${n.ko}에 찾을 유형이 없다`);
+    assert.ok(POS_IDS.has(n.pos), `알 수 없는 포지션 ${n.pos}`);
+    assert.ok(n.wantAttrs.length, `${n.ko}에 요구 능력치가 없다`);
+    for (const a of n.wantAttrs) {
+      assert.ok(ATTR_IDS.has(a.id), `알 수 없는 능력치 ${a.id}`);
+      if (a.target !== null) assert.ok(a.target >= 1 && a.target <= 20, `목표치가 범위를 벗어났다: ${a.target}`);
+    }
+  }
+  // 같은 포지션이 두 번 나오면 안 된다 (센터백 두 자리 → 한 줄)
+  const posSeen = rep.needs.map((n) => n.pos);
+  assert.equal(new Set(posSeen).size, posSeen.length, '같은 포지션이 여러 번 보고됐다');
+  // 심각도 순으로 정렬돼야 한다
+  const rank = { critical: 0, high: 1, mid: 2 };
+  for (let i = 1; i < rep.needs.length; i++) {
+    assert.ok(rank[rep.needs[i - 1].severity] <= rank[rep.needs[i].severity], '심각도 순이 아니다');
+  }
+
+  /*
+   * 그 자리에 아무도 없으면 반드시 잡아야 한다.
+   * 오른쪽 측면 자원을 전부 뺀 스쿼드로 확인한다.
+   */
+  const noRight = squad.filter((p) => !p.positions.some((x) => ['DR', 'WBR', 'MR', 'AMR'].includes(x)));
+  const repNoRight = E.squadNeeds({ players: noRight, standing: 'mid' });
+  const rightNeed = repNoRight.needs.find((n) => ['DR', 'WBR', 'MR', 'AMR'].includes(n.pos));
+  if (repNoRight.base.formation.slots.some((s) => ['DR', 'WBR', 'MR', 'AMR'].includes(s.pos))) {
+    assert.ok(rightNeed, '오른쪽 자원이 하나도 없는데 영입 필요로 잡지 않았다');
+    assert.equal(rightNeed.severity, 'critical', '빈 자리인데 급함으로 보지 않았다');
+    assert.equal(rightNeed.naturalCount, 0);
+    /*
+     * 비교할 선수가 없을 때 스쿼드 최고값을 기준으로 삼으면 안 된다 —
+     * 오른쪽 풀백을 구하는데 센터백의 마크를 보고 "마크 17 이상"을 요구하게 된다.
+     */
+    for (const a of rightNeed.wantAttrs) {
+      if (a.targetKind === 'level') assert.ok(a.target <= 16, `기준 없는 자리에 과한 요구치: ${a.ko} ${a.target}`);
+    }
+  }
+
+  // 백업 영입에 주전보다 높은 값을 요구하면 안 된다
+  for (const n of rep.needs) {
+    if (n.severity === 'critical') continue;
+    for (const a of n.wantAttrs) {
+      if (a.targetKind === 'depth' && a.best !== null) {
+        assert.ok(a.target <= a.best, `백업 자리인데 지금 최고(${a.best})보다 높은 ${a.target}을 요구한다`);
+      }
+    }
+  }
+
+  // 능력치를 모르면 없는 숫자를 지어내면 안 된다
+  const blankSquad2 = squad.map((p) => ({ id: p.id, name: p.name, positions: p.positions, attrs: {} }));
+  const blankRep = E.squadNeeds({ players: blankSquad2, standing: 'mid' });
+  for (const n of blankRep.needs) {
+    for (const a of n.wantAttrs) {
+      assert.equal(a.best, null, '능력치가 없는데 현재값을 지어냈다');
+      if (!a.need) assert.equal(a.target, null, '능력치가 없는데 목표치를 지어냈다');
+    }
+  }
+
+  // 영입이 필요한 자리가 '남는 자리'에도 올라오면 서로 어긋나 보인다
+  const needSet = new Set(rep.needs.map((n) => n.pos));
+  for (const sp of rep.surplus) {
+    assert.ok(!needSet.has(sp.pos), `${sp.ko}가 영입 필요와 남는 자리에 동시에 올라왔다`);
+  }
+
+  // 결정성
+  const rep2 = E.squadNeeds({ players: squad, standing: 'mid' });
+  assert.equal(JSON.stringify(rep.needs.map((n) => [n.pos, n.severity])),
+    JSON.stringify(rep2.needs.map((n) => [n.pos, n.severity])), '같은 입력에서 다른 영입 목록이 나왔다');
 }
 
 // ── 엔진: 대응이 실제로 반영되는가 ────────────────────────────────────────

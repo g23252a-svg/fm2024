@@ -531,6 +531,304 @@
   // 규칙으로 적으면 포메이션 20개에 대해 400가지를 손으로 관리해야 하고,
   // 슬롯을 하나 고칠 때마다 그 400가지가 조용히 어긋납니다.
 
+  // ── 경기 중 상황 ──────────────────────────────────────────────────────
+  var MATCH_PHASES = [
+    { id: 'first-early', ko: '전반 0~25분', idx: 0 },
+    { id: 'first-late', ko: '전반 25~45분', idx: 1 },
+    { id: 'half-time', ko: '하프타임', idx: 2 },
+    { id: 'second-early', ko: '후반 45~60분', idx: 3 },
+    { id: 'second-mid', ko: '60~75분', idx: 4 },
+    { id: 'second-late', ko: '75분 이후', idx: 5 }
+  ];
+
+  var MATCH_FLAGS = [
+    { id: 'red-us', ko: '우리 퇴장' },
+    { id: 'red-them', ko: '상대 퇴장' },
+    { id: 'opp-changed', ko: '상대가 형태를 바꿈' },
+    { id: 'tired', ko: '우리 체력 저하' },
+    { id: 'opp-tired', ko: '상대 체력 저하' },
+    { id: 'opp-parked', ko: '상대가 내려앉음' }
+  ];
+
+  // FM 경기 통계 화면의 항목. 가운데가 항목명, 좌우가 두 팀입니다.
+  var MATCH_STATS = [
+    { id: 'shots', ko: '슈팅', aliases: ['슈팅 수', '슈팅', 'Shots'] },
+    { id: 'sot', ko: '유효 슈팅', aliases: ['유효 슈팅', 'Shots on Target', 'On Target'] },
+    { id: 'xg', ko: '기대 득점', aliases: ['기대 득점', 'xG', 'Expected Goals'] },
+    { id: 'corners', ko: '코너킥', aliases: ['코너킥', '코너', 'Corners'] },
+    { id: 'fouls', ko: '반칙', aliases: ['반칙', '파울', 'Fouls'] },
+    { id: 'cards', ko: '경고', aliases: ['경고', '옐로 카드', 'Yellow Cards', 'Bookings'] },
+    { id: 'passPct', ko: '패스 성공률', aliases: ['패스 성공', '패스 성공률', 'Passes Completed', 'Pass Completion'] },
+    { id: 'possession', ko: '점유율', aliases: ['점유율', 'Possession'] },
+    { id: 'offsides', ko: '오프사이드', aliases: ['오프사이드', 'Offsides'] },
+    { id: 'tackles', ko: '태클 성공', aliases: ['태클 성공', '태클', 'Tackles Won', 'Tackles'] },
+    { id: 'saves', ko: '선방', aliases: ['선방', '세이브', 'Saves'] },
+    { id: 'dribbles', ko: '드리블 성공', aliases: ['드리블 성공', '드리블', 'Dribbles'] },
+    { id: 'headers', ko: '공중 경합 승', aliases: ['헤딩 성공', '공중 볼 경합', 'Headers Won'] },
+    { id: 'interceptions', ko: '인터셉트', aliases: ['인터셉트', '가로채기', 'Interceptions'] }
+  ];
+
+  /*
+   * 경기 중 조정 규칙.
+   *
+   * 경기 전 전술과 다른 점이 하나 있습니다 — 여기서는 "바꾸지 마세요"도 답입니다.
+   * 기대 득점이 쌓이는데 골이 안 들어가는 상황에서 전술을 뒤집으면, 만들고 있던
+   * 것까지 잃습니다. 그래서 hold 종류의 항목을 따로 둡니다.
+   *
+   * c.phaseIdx 0~5, c.diff = 우리 득점 - 상대 득점, c.gf = 우리 득점,
+   * c.flag(id), c.s = 통계(없으면 null), c.us/c.them = 팀별 통계값
+   */
+  var INMATCH_RULES = [
+    // ── 점수와 시간 ────────────────────────────────────────────────
+    {
+      id: 'lead2-halftime', tier: 'key', group: '점수',
+      when: function (c) { return c.diff >= 2 && c.phaseIdx === 2; },
+      why: '두 골 차로 앞선 채 하프타임입니다.',
+      items: [
+        { kind: 'hold', text: '지금은 내리지 마세요.', why: '남은 45분에 두 골 차는 안전하지 않습니다. 여기서 물러서면 상대에게 45분을 통째로 내주게 됩니다.' },
+        { kind: 'shape', text: '한 골 더 넣어 경기를 끝내는 쪽으로 갑니다.', why: '세 골 차가 되면 그때 안전하게 내릴 수 있습니다.' },
+        { kind: 'sub', text: '체력 소모가 큰 역할(프레싱 포워드·볼 위닝 미드필더·컴플리트 윙백)의 교체를 60분에 맞춰 준비합니다.', why: '리드를 지키는 구간이 오기 전에 다리를 남겨 둬야 합니다.' }
+      ]
+    },
+    {
+      id: 'lead2-late', tier: 'key', group: '점수',
+      when: function (c) { return c.diff >= 2 && c.phaseIdx >= 4; },
+      why: '두 골 차 리드로 경기 막바지입니다.',
+      items: [
+        { kind: 'axis', text: '멘탈리티를 한 칸 내립니다.', why: '두 칸을 한 번에 내리면 팀이 통째로 물러서 상대를 우리 진영으로 불러들입니다.' },
+        { kind: 'axis', text: '수비 라인과 압박 시작 위치를 함께 한 칸씩 내립니다.', why: '라인만 내리면 라인과 압박선 사이가 벌어지고, 그 공간이 곧 상대의 슈팅 지역이 됩니다.' },
+        { kind: 'toggle', text: '공을 잃으면 재정비, 뺏으면 대형 유지로 바꿉니다.', why: '역습으로 한 골 더 넣는 값보다 대형을 유지해 실점을 막는 값이 큽니다.' },
+        { kind: 'axis', text: '시간 지연을 올립니다.', why: '' },
+        { kind: 'shape', text: '공격 임무인 측면 수비를 지원이나 수비로 내립니다.', why: '막판 실점은 대개 측면 뒷공간에서 나옵니다.' }
+      ]
+    },
+    {
+      id: 'lead1-halftime', tier: 'key', group: '점수',
+      when: function (c) { return c.diff === 1 && c.phaseIdx === 2; },
+      why: '한 골 차로 앞선 채 하프타임입니다.',
+      items: [
+        { kind: 'hold', text: '전술은 그대로 둡니다.', why: '한 골 차로 45분을 버티는 건 두 골 차보다 훨씬 어렵습니다. 지금 내리면 후반 내내 밀립니다.' },
+        { kind: 'toggle', text: '역압박을 켜서 상대가 전개를 시작하기 전에 끊습니다.', why: '후반 시작 15분이 상대가 가장 강하게 나오는 구간입니다.' }
+      ]
+    },
+    {
+      id: 'lead1-late', tier: 'key', group: '점수',
+      when: function (c) { return c.diff === 1 && c.phaseIdx >= 4; },
+      why: '한 골 차 리드로 경기 막바지입니다.',
+      items: [
+        { kind: 'axis', text: '멘탈리티를 한 칸 내리고 시간 지연을 올립니다.', why: '' },
+        { kind: 'axis', text: '수비 라인·압박 시작 위치를 함께 내립니다.', why: '둘을 따로 움직이면 그 사이가 벌어집니다.' },
+        { kind: 'shape', text: '최전방 한 명은 남겨 둡니다.', why: '전원이 내려가면 걷어낸 공이 즉시 되돌아와 압박이 끊이지 않습니다.' },
+        { kind: 'sub', text: '체력이 떨어진 압박형 선수를 수비 가담이 되는 유형으로 교체합니다.', why: '' }
+      ]
+    },
+    {
+      id: 'level-halftime', tier: 'normal', group: '점수',
+      when: function (c) { return c.diff === 0 && c.phaseIdx === 2; },
+      why: '동점으로 하프타임입니다.',
+      items: [
+        { kind: 'hold', text: '통계를 먼저 보고 정하세요.', why: '동점 자체는 아무 정보도 주지 않습니다. 만들고 있는데 안 들어가는 것과 아무것도 못 만드는 것은 정반대의 처방이 필요합니다.' },
+        { kind: 'axis', text: '판단이 서지 않으면 멘탈리티를 한 칸만 올리고 60분에 다시 봅니다.', why: '하프타임에 크게 바꾸면 그 변화가 맞았는지 틀렸는지 알 수 없게 됩니다.' }
+      ]
+    },
+    {
+      id: 'down1-halftime', tier: 'key', group: '점수',
+      when: function (c) { return c.diff === -1 && c.phaseIdx === 2; },
+      why: '한 골 뒤진 채 하프타임입니다.',
+      items: [
+        { kind: 'hold', text: '아직 45분 남았습니다 — 지금 다 열지 마세요.', why: '하프타임에 전부 열면 60분에 두 골 차가 되고, 그때는 손쓸 방법이 없습니다.' },
+        { kind: 'axis', text: '멘탈리티를 한 칸만 올립니다.', why: '' },
+        { kind: 'sub', text: '교체 카드는 60분 이후에 씁니다.', why: '지금 쓰면 마지막 30분에 쓸 카드가 없습니다.' }
+      ]
+    },
+    {
+      id: 'down1-mid', tier: 'key', group: '점수',
+      when: function (c) { return c.diff === -1 && c.phaseIdx === 4; },
+      why: '한 골 뒤진 채 60분을 넘겼습니다 — 움직일 시점입니다.',
+      items: [
+        { kind: 'axis', text: '멘탈리티를 올리고 수비 라인·압박 시작 위치를 함께 올립니다.', why: '경기장을 압축해 상대가 시간을 쓰지 못하게 합니다.' },
+        { kind: 'toggle', text: '역압박을 켭니다.', why: '' },
+        { kind: 'sub', text: '수비형 미드필더 한 명을 공격 자원으로 교체합니다 — 한 명까지입니다.', why: '둘을 한 번에 빼면 중원이 뚫려 역습으로 경기가 끝납니다.' }
+      ]
+    },
+    {
+      id: 'down1-late', tier: 'key', group: '점수',
+      when: function (c) { return c.diff === -1 && c.phaseIdx === 5; },
+      why: '한 골 뒤진 채 75분을 넘겼습니다.',
+      items: [
+        { kind: 'shape', text: '포메이션을 바꿔 최전방 인원을 늘립니다(4-2-3-1 → 4-2-4 등).', why: '지시만 올리는 것으로는 박스 안 인원이 늘지 않습니다.' },
+        { kind: 'toggle', text: '85분이 지나면 얼리 크로스와 세트피스 노리기를 켜고 제공권 자원을 최대한 올립니다.', why: '' }
+      ]
+    },
+    {
+      id: 'down2', tier: 'key', group: '점수',
+      when: function (c) { return c.diff <= -2 && c.phaseIdx >= 2; },
+      why: '두 골 이상 뒤지고 있습니다.',
+      items: [
+        { kind: 'shape', text: '포메이션 자체를 공격형으로 바꿉니다.', why: '지시만 올리는 것으로는 부족합니다.' },
+        { kind: 'axis', text: '멘탈리티는 공격적까지만 올립니다.', why: '매우 공격적은 대형이 흩어져 실점만 늘리는 경우가 많습니다.' },
+        { kind: 'axis', text: '수비 라인을 올려 경기장을 압축하고 실점을 감수합니다.', why: '두 골 차에서 한 골을 더 먹는 값은 크지 않습니다.' },
+        { kind: 'sub', text: '체력이 남은 선수를 먼저 투입합니다.', why: '' }
+      ]
+    },
+    // ── 특수 상황 ──────────────────────────────────────────────────
+    {
+      id: 'red-us', tier: 'key', group: '상황',
+      when: function (c) { return c.flag('red-us'); },
+      why: '우리가 퇴장으로 수적 열세입니다.',
+      items: [
+        { kind: 'shape', text: '측면 공격수 한 명을 빼고 그 자리를 수비·미드필드로 메웁니다. 최전방 한 명은 남기세요.', why: '전원 후퇴는 압박을 영구히 허용합니다.' },
+        { kind: 'axis', text: '멘탈리티를 신중한으로 내리고 수비 라인·압박 시작 위치를 함께 내립니다.', why: '' },
+        { kind: 'axis', text: '압박 강도를 낮춥니다.', why: '10명으로 압박하면 곧바로 대형이 찢어집니다.' },
+        { kind: 'shape', text: '남은 최전방은 타깃 포워드 계열로 둡니다.', why: '걷어낸 공이 곧바로 되돌아오지 않게 해야 숨을 쉴 수 있습니다.' }
+      ]
+    },
+    {
+      id: 'red-them', tier: 'key', group: '상황',
+      when: function (c) { return c.flag('red-them'); },
+      why: '상대가 퇴장으로 우리가 수적 우위입니다.',
+      items: [
+        { kind: 'axis', text: '공격 폭을 넓힙니다.', why: '10명은 좌우로 늘어나는 것을 가장 못 버팁니다.' },
+        { kind: 'axis', text: '수비 라인을 올려 상대를 자기 진영에 가둡니다.', why: '' },
+        { kind: 'shape', text: '한쪽 풀백을 공격으로 올리고 그쪽 집중 공격을 켭니다.', why: '' },
+        { kind: 'axis', text: '멘탈리티는 한 칸만 올리세요.', why: '상대가 내려앉은 상태에서 무리하게 열면 역습 한 번에 뒤집힙니다.' }
+      ]
+    },
+    {
+      id: 'opp-changed', tier: 'normal', group: '상황',
+      when: function (c) { return c.flag('opp-changed'); },
+      why: '상대가 형태를 바꿨습니다.',
+      items: [
+        { kind: 'shape', text: '중원 인원부터 다시 셉니다 — 밀리면 측면 자원 한 명을 중앙으로 내립니다.', why: '' },
+        { kind: 'shape', text: '상대가 공격형 미드필더를 새로 세웠다면 수비형 미드필더에게 전담 마크를 붙입니다.', why: '' },
+        { kind: 'shape', text: '상대가 스리백으로 바꿨다면 측면 공격수를 상대 윙백 뒤쪽으로 돌립니다.', why: '' },
+        { kind: 'shape', text: '상대가 투톱으로 바꿨고 우리 센터백이 둘이라면 수비형 미드필더 한 명을 수비 임무로 내립니다.', why: '' }
+      ]
+    },
+    {
+      id: 'tired', tier: 'key', group: '상황',
+      when: function (c) { return c.flag('tired'); },
+      why: '우리 선수들의 체력이 떨어졌습니다.',
+      items: [
+        { kind: 'axis', text: '압박 강도와 템포를 한 칸씩 내립니다.', why: '체력이 없는 상태의 압박은 대형만 벌려 놓고 공을 뺏지 못합니다.' },
+        { kind: 'sub', text: '활동량이 큰 역할부터 교체합니다 — 볼 위닝 미드필더 · 박스 투 박스 · 프레싱 포워드 · 컴플리트 윙백.', why: '' }
+      ]
+    },
+    {
+      id: 'opp-tired', tier: 'normal', group: '상황',
+      when: function (c) { return c.flag('opp-tired'); },
+      why: '상대 체력이 떨어졌습니다.',
+      items: [
+        { kind: 'axis', text: '템포와 공격 폭을 올려 상대를 계속 뛰게 합니다.', why: '' },
+        { kind: 'sub', text: '체력이 남은 측면 자원을 투입해 1대1을 반복해서 겁니다.', why: '' }
+      ]
+    },
+    {
+      id: 'opp-parked', tier: 'key', group: '상황',
+      when: function (c) { return c.flag('opp-parked'); },
+      why: '상대가 내려앉았습니다.',
+      items: [
+        { kind: 'axis', text: '공격 폭을 넓혀 상대 블록을 좌우로 늘립니다.', why: '좁은 블록은 옆으로 끌려 나오는 순간 중앙에 틈이 생깁니다.' },
+        { kind: 'toggle', text: '박스 안까지 볼 배급을 켜고, 역습 지시는 끕니다.', why: '상대가 이미 내려와 있어 역습으로 쓸 공간이 없습니다.' },
+        { kind: 'shape', text: '한쪽 풀백을 공격 임무로 올리고 그쪽 오버랩을 켭니다 — 양쪽을 동시에 올리지 마세요.', why: '' },
+        { kind: 'sub', text: '측면에 드리블 돌파형을 넣어 1대1을 만듭니다.', why: '내려앉은 블록은 패스로는 잘 안 열리고 개인 돌파로 열립니다.' }
+      ]
+    },
+    // ── 통계 ──────────────────────────────────────────────────────
+    {
+      id: 'stat-unlucky', tier: 'key', group: '기록',
+      when: function (c) { return c.s && c.us.xg >= 1.2 && c.gf === 0; },
+      why: function (c) { return '기대 득점 ' + c.us.xg + '인데 아직 득점이 없습니다.'; },
+      items: [
+        { kind: 'hold', text: '전술을 바꾸지 마세요.', why: '기회는 만들어지고 있는데 마무리가 안 된 것입니다. 여기서 형태를 뒤집으면 만들고 있던 것까지 잃습니다.' },
+        { kind: 'sub', text: '바꾸려면 전술이 아니라 마무리하는 선수를 바꾸세요.', why: '' }
+      ]
+    },
+    {
+      id: 'stat-parked-detected', tier: 'key', group: '기록',
+      when: function (c) { return c.s && c.us.possession >= 58 && c.us.sot <= 3; },
+      why: function (c) { return '점유율 ' + c.us.possession + '%인데 유효 슈팅이 ' + c.us.sot + '개입니다 — 상대가 내려앉아 있습니다.'; },
+      items: [
+        { kind: 'axis', text: '공격 폭을 한 칸 넓히고 양쪽 오버랩을 켭니다.', why: '공은 갖고 있는데 들어갈 틈이 없다는 뜻이므로, 블록을 옆으로 늘려야 합니다.' },
+        { kind: 'toggle', text: '박스 안까지 볼 배급을 켭니다.', why: '' },
+        { kind: 'sub', text: '측면 1대1이 되는 드리블러와 박스 안 제공권 자원을 넣습니다.', why: '' }
+      ]
+    },
+    {
+      id: 'stat-far-shots', tier: 'key', group: '기록',
+      when: function (c) { return c.s && c.us.shots >= 8 && c.us.xg !== null && c.us.xg <= c.us.shots * 0.08; },
+      why: function (c) { return '슈팅 ' + c.us.shots + '개에 기대 득점 ' + c.us.xg + ' — 먼 거리에서만 쏘고 있습니다.'; },
+      items: [
+        { kind: 'toggle', text: '적극적으로 슛을 끄고 박스 안까지 볼 배급을 켭니다.', why: '슈팅 수가 아니라 슈팅 위치가 문제입니다.' },
+        { kind: 'shape', text: '중거리 슛이 높은 선수의 개인 지시에서 「더 자주 슛」을 뺍니다.', why: '' }
+      ]
+    },
+    {
+      id: 'stat-dominated', tier: 'key', group: '기록',
+      when: function (c) { return c.s && c.us.possession <= 42 && c.them.shots >= 8; },
+      why: function (c) { return '점유율 ' + c.us.possession + '%에 상대 슈팅 ' + c.them.shots + '개 — 밀리고 있습니다.'; },
+      items: [
+        { kind: 'axis', text: '압박 시작 위치를 내리고 대형을 낮게 모읍니다.', why: '높은 곳에서 못 뺏는 압박은 대형만 벌려 놓습니다.' },
+        { kind: 'toggle', text: '공을 잃으면 재정비로 바꿉니다.', why: '' },
+        { kind: 'shape', text: '중원에 한 명을 더 두는 형태로 바꿉니다.', why: '점유율이 이 정도로 낮으면 중원 숫자가 모자란 경우가 대부분입니다.' }
+      ]
+    },
+    {
+      id: 'stat-opp-xg', tier: 'key', group: '기록',
+      when: function (c) { return c.s && c.them.xg !== null && c.them.xg >= 1.0; },
+      why: function (c) { return '상대 기대 득점이 ' + c.them.xg + '입니다 — 좋은 기회를 계속 내주고 있습니다.'; },
+      items: [
+        { kind: 'axis', text: '수비 라인과 압박 시작 위치를 함께 내립니다.', why: '' },
+        { kind: 'shape', text: '수비형 미드필더를 수비 임무로 내리거나 한 명 더 둡니다.', why: '' },
+        { kind: 'shape', text: '실점 장면이 측면 크로스에서 나왔다면 안쪽으로 유도를 켜세요.', why: '' }
+      ]
+    },
+    {
+      id: 'stat-pass-low', tier: 'normal', group: '기록',
+      when: function (c) { return c.s && c.us.passPct !== null && c.us.passPct <= 78; },
+      why: function (c) { return '패스 성공률이 ' + c.us.passPct + '%입니다.'; },
+      items: [
+        { kind: 'axis', text: '패스를 짧게, 템포를 한 칸 내립니다.', why: '성공률이 낮은 상태에서 템포를 올리면 잃는 횟수만 늘어납니다.' },
+        { kind: 'toggle', text: '상대가 강하게 압박한다면 후방에서 짧게 시작을 끕니다.', why: '우리 진영에서 잃는 것이 가장 비쌉니다.' }
+      ]
+    },
+    {
+      id: 'stat-fouls', tier: 'normal', group: '기록',
+      when: function (c) { return c.s && (c.us.fouls >= 10 || c.us.cards >= 2); },
+      why: function (c) { return '반칙 ' + c.us.fouls + '회 · 경고 ' + c.us.cards + '장입니다.'; },
+      items: [
+        { kind: 'axis', text: '태클 강도를 「발 떼지 않기」로 내립니다.', why: '경고가 쌓인 선수가 퇴장당하면 그 뒤는 전술 문제가 아닙니다.' },
+        { kind: 'sub', text: '경고를 받은 수비수는 교체를 고려하세요.', why: '' }
+      ]
+    },
+    {
+      id: 'stat-corners', tier: 'normal', group: '기록',
+      when: function (c) { return c.s && c.us.corners >= 6 && c.gf === 0; },
+      why: function (c) { return '코너킥 ' + c.us.corners + '개에서 아직 득점이 없습니다.'; },
+      items: [
+        { kind: 'toggle', text: '세트피스 노리기를 켜고 제공권 자원을 박스 안에 더 둡니다.', why: '이미 코너를 많이 얻고 있다면 그 경로가 가장 싼 득점 방법입니다.' }
+      ]
+    },
+    {
+      id: 'stat-offside', tier: 'normal', group: '기록',
+      when: function (c) { return c.s && c.us.offsides !== null && c.us.offsides >= 4; },
+      why: function (c) { return '오프사이드가 ' + c.us.offsides + '회입니다.'; },
+      items: [
+        { kind: 'toggle', text: '공간으로 패스를 끕니다.', why: '뒷공간 침투가 계속 걸리고 있다는 뜻입니다 — 타이밍이 아니라 방법을 바꿔야 합니다.' },
+        { kind: 'shape', text: '최전방을 발밑으로 받는 역할(딥 라잉 포워드)로 바꿔 봅니다.', why: '' }
+      ]
+    },
+    {
+      id: 'stat-no-shots', tier: 'key', group: '기록',
+      when: function (c) { return c.s && c.us.shots <= 3 && c.us.possession >= 48; },
+      why: function (c) { return '점유율 ' + c.us.possession + '%인데 슈팅이 ' + c.us.shots + '개뿐입니다 — 공은 갖고 있는데 만들지 못하고 있습니다.'; },
+      items: [
+        { kind: 'shape', text: '최전방과 2선에 침투하는 역할을 넣습니다(섀도 스트라이커 · 어드밴스드 포워드).', why: '앞으로 달리는 사람이 없으면 패스를 넣을 곳도 없습니다.' },
+        { kind: 'axis', text: '패스를 조금 더 직선적으로, 템포를 올립니다.', why: '옆으로만 도는 점유는 상대를 전혀 움직이지 못합니다.' }
+      ]
+    }
+  ];
+
   // ── 경기 중 시나리오 ──────────────────────────────────────────────────
   var SCENARIOS = [
     {
@@ -627,6 +925,10 @@
     FM_PRESET_BLANK: FM_PRESET_BLANK,
     OPP_TRAITS: OPP_TRAITS,
     RULES: RULES,
+    MATCH_PHASES: MATCH_PHASES,
+    MATCH_FLAGS: MATCH_FLAGS,
+    MATCH_STATS: MATCH_STATS,
+    INMATCH_RULES: INMATCH_RULES,
     SCENARIOS: SCENARIOS
   };
 })(typeof window !== 'undefined' ? window : globalThis);
