@@ -1862,6 +1862,59 @@
     };
   }
 
+  /*
+   * 이탈 선수가 전술을 어떻게 바꿨는지.
+   *
+   * 부상 선수를 빼고 다시 짜기만 하면 "왜 갑자기 이 역할이지?"가 됩니다.
+   * 전원이 있을 때의 전술과 나란히 놓고 달라진 것만 보여 줍니다 —
+   * 대체 선수의 성격이 다르면 역할과 지시가 함께 움직이기 때문입니다.
+   */
+  function diffTactics(full, cur, unavailable) {
+    var out = { formation: null, slots: [], instructions: [], plan: null };
+    if (!full) return out;
+
+    if (full.xi.formation.id !== cur.xi.formation.id) {
+      out.formation = { from: full.xi.formation.ko, to: cur.xi.formation.ko };
+    }
+    var fullPlan = full.plans.top.map(function (p) { return p.ko; }).join(' + ');
+    var curPlan = cur.plans.top.map(function (p) { return p.ko; }).join(' + ');
+    if (fullPlan !== curPlan) out.plan = { from: fullPlan, to: curPlan };
+
+    // 포메이션이 그대로일 때만 자리별로 비교합니다 — 형태가 바뀌면 자리 자체가 달라집니다.
+    if (!out.formation) {
+      var byId = {};
+      full.xi.lineup.forEach(function (l) { byId[l.slot.id] = l; });
+      cur.xi.lineup.forEach(function (l) {
+        var was = byId[l.slot.id];
+        if (!was) return;
+        var playerChanged = (was.player && was.player.name) !== (l.player && l.player.name);
+        var roleChanged = was.role.id !== l.role.id || was.duty !== l.duty;
+        if (!playerChanged && !roleChanged) return;
+        out.slots.push({
+          slot: l.slot,
+          fromPlayer: was.player ? was.player.name : null,
+          toPlayer: l.player ? l.player.name : null,
+          fromRole: was.role.ko + '/' + RD.DUTIES[was.duty].ko,
+          toRole: l.role.ko + '/' + RD.DUTIES[l.duty].ko,
+          roleChanged: roleChanged,
+          fitDrop: (was.fit != null && l.fit != null) ? was.fit - l.fit : null,
+          // 이 자리의 원래 주인이 빠진 사람인가
+          wasUnavailable: !!(was.player && unavailable.some(function (u) { return u.name === was.player.name; }))
+        });
+      });
+    }
+
+    Object.keys(cur.instructions.axes).forEach(function (k) {
+      var a = cur.instructions.axes[k], b = full.instructions.axes[k];
+      if (a.index !== b.index) out.instructions.push({ ko: a.ko, from: b.label, to: a.label });
+    });
+    Object.keys(cur.instructions.toggles).forEach(function (k) {
+      var a = cur.instructions.toggles[k], b = full.instructions.toggles[k];
+      if (a.on !== b.on) out.instructions.push({ ko: a.ko, from: b.on ? '켜기' : '끄기', to: a.on ? '켜기' : '끄기' });
+    });
+    return out;
+  }
+
   // ── 최상위 진입점 ─────────────────────────────────────────────────────
   function generate(input) {
     var players = (input.players || []).map(function (p, i) {
@@ -1898,7 +1951,7 @@
     var warnings = balanceWarnings(xi, instructions.axes, instructions.toggles, xiSquad, opp);
     var pis = individualInstructions(xi, opp, plans.top, instructions.axes);
 
-    return {
+    var result = {
       squad: squad,
       xiSquad: xiSquad,
       unavailable: split.unavailable,
@@ -1923,6 +1976,28 @@
       brief: counterBrief(fired),
       scenarios: TD.SCENARIOS
     };
+
+    /*
+     * 빠진 선수가 있으면 "전원이 있었다면 어땠을지"를 한 번 더 계산해 견줍니다.
+     * 대체 선수의 성격이 다르면 역할과 지시가 함께 움직이는데, 그걸 말해 주지
+     * 않으면 "왜 갑자기 이 역할이지?"가 됩니다.
+     */
+    if (split.unavailable.length && !input._noImpact) {
+      var full = null;
+      try {
+        full = generate({
+          players: (input.players || []).map(function (p) {
+            var c = Object.assign({}, p);
+            delete c.out; delete c.outReason;
+            return c;
+          }),
+          opponent: input.opponent, context: input.context,
+          allowedFormations: input.allowedFormations, _noImpact: true
+        });
+      } catch (e) { full = null; }
+      if (full) result.injuryImpact = diffTactics(full, result, split.unavailable);
+    }
+    return result;
   }
 
   root.FM_ENGINE = {

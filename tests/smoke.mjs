@@ -1066,6 +1066,65 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.ok(!r.instructions.toggles.counterpress.on, '상대가 역습형인데 역압박이 켜져 있다');
 }
 
+// ── 부상·출장 정지 ────────────────────────────────────────────────────────
+{
+  const key = squad.find((p) => p.name === 'CB1');
+  const withInjury = squad.map((p) => (p.name === 'CB1' ? { ...p, out: true, outReason: '부상' } : p));
+  const r = run({ formationId: '4231' }, {}, withInjury);
+
+  // 빠진 선수는 선발에 없어야 한다
+  assert.ok(!r.xi.lineup.some((l) => l.player && l.player.name === 'CB1'),
+    '부상으로 표시한 선수가 선발에 들어갔다');
+  assert.equal(r.xi.lineup.filter((l) => l.player).length, 11, '한 명 빠졌는데 선발이 안 채워졌다');
+  assert.equal(r.unavailable.length, 1);
+  assert.equal(r.unavailable[0].name, 'CB1');
+  assert.equal(r.unavailable[0].reason, '부상');
+  void key;
+
+  // 무엇이 달라졌는지 알려 줘야 한다
+  assert.ok(r.injuryImpact, '이탈 영향을 계산하지 않았다');
+  const im = r.injuryImpact;
+  assert.ok(im.formation || im.plan || im.slots.length || im.instructions.length,
+    '주전이 빠졌는데 달라진 것이 하나도 없다고 한다');
+  for (const sl of im.slots) {
+    assert.ok(sl.slot && sl.fromRole && sl.toRole, '자리 변화 형식이 잘못됐다');
+    assert.ok(sl.fromPlayer !== sl.toPlayer || sl.roleChanged, '달라진 게 없는데 변화로 올렸다');
+  }
+  // 빠진 선수가 원래 있던 자리가 변화 목록에 있어야 한다
+  assert.ok(im.slots.some((sl) => sl.wasUnavailable), '이탈한 선수의 자리를 표시하지 않았다');
+
+  // 이탈이 없으면 영향 계산도 하지 않는다 (쓸데없이 두 번 돌리지 않는다)
+  const clean = run({ formationId: '4231' });
+  assert.equal(clean.injuryImpact, undefined, '이탈이 없는데 영향을 계산했다');
+  assert.equal(clean.unavailable.length, 0);
+
+  // 대체 선수의 성격이 다르면 역할이 따라 바뀌어야 한다
+  const passer = { id: 'PASSCB', name: 'PASSCB', positions: ['DC'], foot: 'R',
+    attrs: { ...squad.find((p) => p.name === 'CB1').attrs, pas: 16, tec: 15, cmp: 16 } };
+  const clogger = { id: 'CLOGCB', name: 'CLOGCB', positions: ['DC'], foot: 'R',
+    attrs: { ...squad.find((p) => p.name === 'CB1').attrs, pas: 5, tec: 5, cmp: 6, hea: 17, str: 17, jum: 17 } };
+  const base2 = squad.filter((p) => !['CB1', 'CB2', 'CB3'].includes(p.name)).concat([passer, clogger]);
+  const withPasser = E.generate({ players: base2, opponent: { formationId: '4231' }, context: {}, allowedFormations: ['442'] });
+  const withoutPasser = E.generate({
+    players: base2.map((p) => (p.name === 'PASSCB' ? { ...p, out: true, outReason: '부상' } : p)),
+    opponent: { formationId: '4231' }, context: {}, allowedFormations: ['442']
+  });
+  assert.ok(!withoutPasser.xi.lineup.some((l) => l.player && l.player.name === 'PASSCB'));
+  void withPasser;
+
+  // 골키퍼가 빠지면 백업 골키퍼가 들어가야 한다
+  const gkOut = squad.map((p) => (p.name === 'GK1' ? { ...p, out: true, outReason: '부상' } : p));
+  const rg = run({ formationId: '4231' }, {}, gkOut);
+  const gkSlot = rg.xi.lineup.find((l) => l.slot.pos === 'GK');
+  assert.equal(gkSlot.player.name, 'GK2', `골키퍼가 빠졌는데 ${gkSlot.player.name}이 골문에 섰다`);
+
+  // 너무 많이 빠져 11명이 안 되면 빈자리로 남되 죽지 않아야 한다
+  const manyOut = squad.map((p, i) => (i < 12 ? { ...p, out: true, outReason: '부상' } : p));
+  const rm = run({ formationId: '4231' }, {}, manyOut);
+  assert.equal(rm.xi.lineup.length, 11);
+  assert.equal(rm.unavailable.length, 12);
+}
+
 // ── 엔진: 스쿼드가 결과를 바꾸는가 ────────────────────────────────────────
 {
   // 스태미너가 바닥인 스쿼드에서는 압박을 낮춰야 한다
