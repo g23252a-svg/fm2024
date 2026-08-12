@@ -79,6 +79,28 @@
     ATTRS[id] = { id: id, ko: ATTR_TABLE[id][0], group: ATTR_TABLE[id][1] };
   });
 
+  /*
+   * 간편 입력 묶음
+   *
+   * 능력치 47개를 손으로 치는 건 현실적이지 않습니다. FM에서 능력치 열을 넣어
+   * 다시 내보내는 게 가장 좋지만, 그게 번거로울 때 9개 항목만 넣어 스쿼드를
+   * 빠르게 세울 수 있게 합니다.
+   *
+   * 47개를 빠짐없이 한 번씩만 덮어야 합니다(테스트가 확인합니다). 하나라도 빠지면
+   * 그 능력치는 영영 '모름'으로 남고, 겹치면 나중 묶음이 앞 묶음을 덮어씁니다.
+   */
+  var QUICK_GROUPS = [
+    { id: 'def', ko: '수비', hint: '마크 · 태클 · 위치 선정 · 집중력 · 예측력', attrs: ['mar', 'tck', 'pos', 'cnt', 'ant'] },
+    { id: 'phys', ko: '몸싸움 · 제공권', hint: '헤딩 · 점프 · 몸싸움 · 균형 · 용맹성 · 적극성', attrs: ['hea', 'jum', 'str', 'bal', 'bra', 'agg'] },
+    { id: 'pass', ko: '패스 · 시야', hint: '패스 · 시야 · 판단력 · 침착성 · 팀워크', attrs: ['pas', 'vis', 'dec', 'cmp', 'tea'] },
+    { id: 'tech', ko: '기술 · 드리블', hint: '테크닉 · 퍼스트 터치 · 드리블 · 개인기 · 민첩성', attrs: ['tec', 'fir', 'dri', 'fla', 'agi'] },
+    { id: 'fin', ko: '마무리 · 침투', hint: '마무리 · 중거리 슛 · 오프더볼', attrs: ['fin', 'lon', 'otb'] },
+    { id: 'set', ko: '크로스 · 세트피스', hint: '크로스 · 코너킥 · 프리킥 · 페널티킥 · 롱 스로인', attrs: ['cro', 'cor', 'fre', 'pen', 'lth'] },
+    { id: 'pace', ko: '속도', hint: '속도 · 가속도', attrs: ['pac', 'acc'] },
+    { id: 'work', ko: '체력 · 활동량', hint: '스태미너 · 활동량 · 자연 체력 · 결단력 · 리더십', attrs: ['sta', 'wor', 'nat', 'det', 'ldr'] },
+    { id: 'gk', ko: '골키퍼', hint: '골키퍼 전용 능력치 11개', attrs: ['aer', 'cmd', 'com', 'han', 'kic', 'ono', 'ref', 'tro', 'pun', 'thr', 'ecc'] }
+  ];
+
   // ── 포지션 ────────────────────────────────────────────────────────────────
   // FM의 포지션 칸. side는 좌우 구분, line은 세로 라인(0=GK … 5=ST).
   var POSITIONS = [
@@ -575,6 +597,7 @@
     ATTRS: ATTRS,
     ATTR_GROUPS: ATTR_GROUPS,
     ATTR_ORDER: Object.keys(ATTR_TABLE),
+    QUICK_GROUPS: QUICK_GROUPS,
     POSITIONS: POSITIONS,
     DUTIES: DUTIES,
     ROLES: ROLES

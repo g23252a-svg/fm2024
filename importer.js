@@ -255,16 +255,26 @@
     }
     if (bestIdx < 0 || bestHit < 2) return null;
 
-    // 'Pos'가 능력치 표 한가운데 있으면 포지션이 아니라 '위치 선정'입니다.
-    // 좌우 열이 모두 능력치면 그렇게 봅니다.
-    Object.keys(bestMap).forEach(function (jStr) {
-      var j = +jStr;
-      if (bestMap[j] !== 'position') return;
-      var left = bestMap[j - 1], right = bestMap[j + 1];
-      var leftAttr = left && left.indexOf('attr:') === 0;
-      var rightAttr = right && right.indexOf('attr:') === 0;
-      if (leftAttr && rightAttr) bestMap[j] = 'attr:pos';
-    });
+    /*
+     * FM의 'Pos'는 포지션이기도 하고 '위치 선정'이기도 합니다. 둘을 가릅니다.
+     *
+     * 1) 포지션으로 읽힌 열이 둘 이상이면 첫 번째만 포지션이고 나머지는 위치 선정입니다.
+     *    (`Name | Position | Mar | Tck | Pos` 처럼 표 끝에 붙는 경우가 이쪽입니다.
+     *    이걸 놓치면 능력치 값 "15"를 포지션으로 파싱해 빈 배열이 되고,
+     *    멀쩡히 읽은 포지션을 덮어써 버립니다.)
+     * 2) 하나뿐이어도 좌우가 모두 능력치면 위치 선정으로 봅니다.
+     */
+    var positionCols = Object.keys(bestMap).map(Number)
+      .filter(function (j) { return bestMap[j] === 'position'; })
+      .sort(function (a, b) { return a - b; });
+    positionCols.slice(1).forEach(function (j) { bestMap[j] = 'attr:pos'; });
+    if (positionCols.length === 1) {
+      var j0 = positionCols[0];
+      var left = bestMap[j0 - 1], right = bestMap[j0 + 1];
+      if (left && left.indexOf('attr:') === 0 && right && right.indexOf('attr:') === 0) {
+        bestMap[j0] = 'attr:pos';
+      }
+    }
 
     var unknown = [];
     rows[bestIdx].forEach(function (h, j) {
@@ -346,7 +356,9 @@
    */
   function mergeSquad(existing, incoming) {
     var out = (existing || []).map(function (p) {
-      return Object.assign({}, p, { attrs: Object.assign({}, p.attrs || {}) });
+      var copy = Object.assign({}, p, { attrs: Object.assign({}, p.attrs || {}) });
+      if (p.quickAttrs) copy.quickAttrs = Object.assign({}, p.quickAttrs);
+      return copy;
     });
     var byName = {};
     out.forEach(function (p, i) { byName[p.name] = i; });
@@ -364,6 +376,8 @@
       Object.keys(p.attrs || {}).forEach(function (k) {
         if (cur.attrs[k] === undefined) filled++;
         cur.attrs[k] = p.attrs[k];
+        // 진짜 값이 들어오면 그 자리의 '추정값' 표시는 사라집니다.
+        if (cur.quickAttrs) delete cur.quickAttrs[k];
       });
       // 비어 있는 값으로 이미 있는 값을 지우지 않습니다.
       if (p.positions && p.positions.length) cur.positions = p.positions;

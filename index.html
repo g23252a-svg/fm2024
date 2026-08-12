@@ -619,12 +619,32 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ])
     ];
     if (r.noPosition) lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + r.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
-    if (r.noAttrs) lines.push(h('div', { class: 'tiny muted', text: '능력치가 하나도 없는 선수 ' + r.noAttrs + '명.' }));
-    if (!r.attrColumns) lines.push(h('div', { class: 'tiny muted', text: '능력치 열이 하나도 없습니다 — 보기에 능력치 열을 추가한 뒤 다시 내보내세요. 「안내」 탭에 방법이 있습니다.' }));
+    if (r.noAttrs && r.attrColumns) lines.push(h('div', { class: 'tiny muted', text: '능력치가 하나도 없는 선수 ' + r.noAttrs + '명.' }));
     if (r.unknownColumns && r.unknownColumns.length) {
       lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' + r.unknownColumns.slice(0, 12).join(', ') + (r.unknownColumns.length > 12 ? ' 외 ' + (r.unknownColumns.length - 12) + '개' : '') }));
     }
-    return h('div', { class: 'rep' }, lines);
+    var box = h('div', { class: 'rep' }, lines);
+    if (r.attrColumns) return box;
+
+    // 능력치 열이 하나도 없는 경우 — 손으로 47개를 치게 두면 안 되므로
+    // 무엇을 하면 되는지 여기서 바로 알려 줍니다.
+    return h('div', {}, [
+      box,
+      h('div', { class: 'rep err', style: 'margin-top:8px' }, [
+        h('div', {}, [h('b', { text: '능력치 열이 하나도 없습니다.' }),
+          ' 이 상태로는 포지션만 보고 역할을 정하게 됩니다.']),
+        h('div', { class: 'small', style: 'margin-top:7px;color:var(--dim)' }, [
+          '가장 좋은 방법은 FM에서 ', h('b', { style: 'color:var(--text)', text: '보기 편집' }),
+          '으로 능력치 열을 넣고 다시 내보내는 것입니다. 그게 번거로우면 아래 선수 목록에서 ',
+          h('b', { style: 'color:var(--text)', text: '간편 입력' }),
+          '으로 선수당 9개 항목만 넣어도 됩니다.'
+        ]),
+        h('div', { class: 'row', style: 'margin-top:9px' }, [
+          h('button', { class: 'btn sm', onclick: function () { S.tab = 'guide'; render(); window.scrollTo(0, 0); } },
+            ['내보내기 방법 보기'])
+        ])
+      ])
+    ]);
   }
 
   RENDER.squad = function (root) {
@@ -696,12 +716,17 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       var list = h('div', { class: 'plist' });
       S.players.forEach(function (p, i) {
         var known = Object.keys(p.attrs || {}).filter(function (k) { return p.attrs[k] > 0; }).length;
+        var est = quickCount(p);
         list.appendChild(h('div', { class: 'prow' }, [
           h('div', { class: 'grow', style: 'min-width:0' }, [
             h('div', { class: 'nm', text: p.name }),
-            h('div', { class: 'ps', text: (p.positions || []).join(' · ') || '포지션 없음' })
+            h('div', { class: 'ps', text: ((p.positions || []).join(' · ') || '포지션 없음')
+              + (est ? '  · 추정 ' + est + '개' : '') })
           ]),
-          h('div', { class: 'cov' }, [h('b', { text: String(known) }), '/' + RD.ATTR_ORDER.length]),
+          h('div', { class: 'cov' }, [
+            h('b', { style: known ? '' : 'color:var(--warn)', text: String(known) }),
+            '/' + RD.ATTR_ORDER.length
+          ]),
           h('button', {
             class: 'btn sm ghost',
             onclick: function () {
@@ -743,6 +768,72 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     ]));
   };
 
+  /*
+   * 간편 입력 — 47개 대신 9개.
+   * 정확도는 실제 능력치보다 떨어지므로 채워 넣은 뒤 그 사실을 선수에 표시하고,
+   * 결과 화면에서도 몇 명이 추정값인지 알려 줍니다. 100% 입력된 것처럼 보이면
+   * 그 숫자를 그대로 믿게 되기 때문입니다.
+   */
+  function quickEntry(p) {
+    var vals = {};
+    RD.QUICK_GROUPS.forEach(function (g) {
+      // 이미 값이 있으면 그 묶음의 평균을 기본값으로 보여 줍니다.
+      var known = g.attrs.map(function (a) { return (p.attrs || {})[a]; })
+        .filter(function (v) { return typeof v === 'number' && v > 0; });
+      vals[g.id] = known.length ? Math.round(known.reduce(function (a, b) { return a + b; }, 0) / known.length) : 10;
+    });
+
+    function apply(onlyEmpty) {
+      p.attrs = p.attrs || {};
+      // 어떤 값이 추정인지 능력치 단위로 기억합니다. 나중에 진짜 값을 가져오면
+      // 그 표시가 하나씩 사라지고, 화면은 남은 추정 개수를 그대로 보여 줍니다.
+      p.quickAttrs = p.quickAttrs || {};
+      var touched = 0;
+      RD.QUICK_GROUPS.forEach(function (g) {
+        g.attrs.forEach(function (a) {
+          if (onlyEmpty && p.attrs[a] > 0) return;
+          p.attrs[a] = vals[g.id];
+          p.quickAttrs[a] = 1;
+          touched++;
+        });
+      });
+      save(); render();
+      toast(touched + '개 능력치를 채웠습니다(추정값).');
+    }
+
+    var grid = h('div', { class: 'attrgrid' });
+    RD.QUICK_GROUPS.forEach(function (g) {
+      grid.appendChild(h('div', { class: 'a', title: g.hint }, [
+        h('label', { for: 'q_' + g.id, text: g.ko }),
+        h('input', {
+          id: 'q_' + g.id, type: 'number', min: '1', max: '20', inputmode: 'numeric',
+          value: String(vals[g.id]),
+          oninput: function (e) {
+            var v = parseInt(e.target.value, 10);
+            if (isFinite(v) && v >= 1 && v <= 20) vals[g.id] = v;
+          }
+        })
+      ]));
+    });
+
+    return h('details', { class: 'help', open: !Object.keys(p.attrs || {}).length }, [
+      h('summary', { text: '간편 입력 — 9개만 넣기' }),
+      h('div', { class: 'body' }, [
+        h('div', { style: 'margin-bottom:9px' },
+          ['능력치 47개를 손으로 치는 대신 아래 9개만 넣으면 묶음 안의 능력치를 그 값으로 채웁니다. ',
+           'FM에서 능력치 열을 넣어 다시 내보내는 편이 훨씬 정확하지만, 급할 때 쓰세요.']),
+        grid,
+        h('div', { class: 'row', style: 'margin-top:10px' }, [
+          h('button', { class: 'btn sm pri', onclick: function () { apply(false); } }, ['전체 채우기']),
+          h('button', { class: 'btn sm', onclick: function () { apply(true); } }, ['빈 항목만 채우기']),
+          quickCount(p)
+            ? h('span', { class: 'tiny', style: 'color:var(--warn)', text: '추정값 ' + quickCount(p) + '개' })
+            : null
+        ])
+      ])
+    ]);
+  }
+
   function playerEditor(p) {
     var card = h('div', { class: 'card', id: 'playerEditor' });
     card.appendChild(h('h2', { text: '선수 편집' }));
@@ -780,6 +871,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       }, [pos.ko]));
     });
     card.appendChild(chips);
+
+    card.appendChild(quickEntry(p));
 
     var groups = [['gk', 'GK'], ['tec', '기술'], ['men', '정신'], ['phy', '신체']];
     groups.forEach(function (g) {
@@ -1171,7 +1264,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
     // 데이터 신뢰도
     var cov = Math.round(res.squad.coverage * 100);
-    root.appendChild(h('div', { class: 'card tight' }, [
+    var estXI = res.xi.lineup.filter(function (l) { return l.player && quickCount(l.player); }).length;
+    var lines = [
       h('div', { class: 'small muted' }, [
         '능력치 입력률 ', h('b', { style: 'color:' + (cov >= 60 ? 'var(--acc)' : 'var(--warn)'), text: cov + '%' }),
         ' · 선수 ' + res.squad.count + '명. ',
@@ -1180,8 +1274,19 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
           : '선발 11명 기준 속도 ' + res.xiSquad.pace + ' · 기술 ' + res.xiSquad.technique +
             ' · 제공권 ' + res.xiSquad.aerial + ' · 체력 ' + res.xiSquad.stamina + '.'
       ])
-    ]));
+    ];
+    if (estXI) {
+      lines.push(h('div', { class: 'small', style: 'color:var(--warn);margin-top:5px',
+        text: '선발 ' + estXI + '명이 간편 입력(추정값)입니다 — 그 선수들의 역할 추천은 실제 능력치만큼 갈라지지 않습니다.' }));
+    }
+    root.appendChild(h('div', { class: 'card tight' }, lines));
   };
+
+  function quickCount(p) {
+    return Object.keys(p.quickAttrs || {}).filter(function (k) {
+      return (p.attrs || {})[k] > 0;
+    }).length;
+  }
 
   function summaryCell(label, value, color) {
     return h('div', {}, [
@@ -1281,7 +1386,15 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
             ' 「스쿼드」 탭에서 그 파일을 선택하면 끝입니다.'])
         ]),
         h('p', {}, ['열이 많을수록 정확해집니다. 최소한 ', h('strong', { text: '이름 · 포지션' }),
-          '은 있어야 하고, 능력치가 없으면 역할 추천이 포지션만 보고 이루어집니다.'])
+          '은 있어야 하고, 능력치가 없으면 역할 추천이 포지션만 보고 이루어집니다.']),
+        h('p', {}, [h('strong', { text: '열이 많아 화면이 좁으면 두 번에 나눠 내보내도 됩니다.' }),
+          ' 예를 들어 1차는 이름·포지션·기술·정신, 2차는 이름·포지션·신체·골키퍼로 보기를 만들어 각각 내보낸 뒤 둘 다 가져오세요. ',
+          '이름이 같으면 덮어쓰지 않고 능력치가 합쳐집니다.']),
+        h('p', {}, [h('strong', { text: '이미 능력치 없이 가져왔다면' }),
+          ' — 능력치 열을 넣어 다시 내보내 가져오면 기존 선수에 능력치만 채워집니다(선수가 중복 생성되지 않습니다). ',
+          '그게 번거로우면 선수 목록의 ', h('code', { text: '편집 → 간편 입력' }),
+          '에서 47개 대신 9개 항목만 넣어도 됩니다. 그렇게 채운 값은 ',
+          h('strong', { text: '추정값으로 표시' }), '되고, 나중에 진짜 능력치를 가져오면 그 표시가 사라집니다.'])
       ])
     ]));
 

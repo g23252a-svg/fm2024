@@ -67,6 +67,24 @@ for (const r of RD.ROLES) {
   assert.ok(r.key.length >= 5, `역할 ${r.id}의 key 능력치가 너무 적다`);
 }
 
+// 간편 입력 묶음은 47개 능력치를 빠짐없이 한 번씩만 덮어야 한다.
+// 빠지면 그 능력치가 영영 '모름'으로 남고, 겹치면 뒤 묶음이 앞 묶음을 덮어쓴다.
+{
+  const seen = new Map();
+  for (const g of RD.QUICK_GROUPS) {
+    assert.ok(g.id && g.ko && g.hint, `간편 입력 묶음 ${g.id}에 이름/설명이 빠졌다`);
+    assert.ok(g.attrs.length, `간편 입력 묶음 ${g.id}가 비어 있다`);
+    for (const a of g.attrs) {
+      assert.ok(ATTR_IDS.has(a), `간편 입력 묶음 ${g.id}의 알 수 없는 능력치 ${a}`);
+      assert.ok(!seen.has(a), `능력치 ${a}가 ${seen.get(a)}와 ${g.id} 두 묶음에 들어 있다`);
+      seen.set(a, g.id);
+    }
+  }
+  const missing = [...RD.ATTR_ORDER].filter((a) => !seen.has(a));
+  assert.deepEqual(missing, [], `간편 입력에서 빠진 능력치: ${missing.join(', ')}`);
+  assert.equal(seen.size, RD.ATTR_ORDER.length);
+}
+
 // 모든 포지션 칸에 최소 하나의 역할이 존재해야 한다 — 아니면 그 칸은 비어 버린다
 for (const pos of POS_IDS) {
   assert.ok(RD.ROLES.some((r) => r.pos.includes(pos)), `${pos} 자리에 쓸 수 있는 역할이 없다`);
@@ -242,6 +260,19 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   assert.equal(posCase.players[0].attrs.pos, 13, "능력치 표의 'Pos'를 위치 선정으로 읽지 못했다");
   assert.deepEqual([...posCase.players[0].positions], ['MC']);
 
+  // 'Pos'가 표 맨 끝에 있어도(오른쪽에 열이 없어도) 위치 선정이어야 한다.
+  // 이걸 포지션으로 읽으면 능력치 값을 포지션으로 파싱해 멀쩡한 포지션을 지운다.
+  const posTail = IMP.parseSquad('Name\tPosition\tMar\tTck\tPos\n김민재\tD (C)\t17\t16\t15');
+  assert.deepEqual([...posTail.players[0].positions], ['DC'], "표 끝의 'Pos'가 포지션을 지웠다");
+  assert.equal(posTail.players[0].attrs.pos, 15, "표 끝의 'Pos'를 위치 선정으로 읽지 못했다");
+  assert.equal(posTail.report.attrColumns, 3, `능력치 열이 3개로 세어지지 않았다: ${posTail.report.attrColumns}`);
+  assert.equal(posTail.report.noPosition, 0, '포지션을 못 읽은 선수가 생겼다');
+
+  // 포지션 열이 맨 앞에 하나만 있고 나머지가 전부 능력치인 흔한 배치
+  const plain = IMP.parseSquad('Name\tPosition\tAcc\tPac\nY\tST (C)\t15\t16');
+  assert.deepEqual([...plain.players[0].positions], ['ST']);
+  assert.equal(plain.report.attrColumns, 2);
+
   // 인식 못한 열은 조용히 버리지 말고 보고해야 한다
   const withJunk = IMP.parseSquad('Name\tPosition\tAcc\tTransfer Value\nY\tGK\t11\t£2M');
   assert.ok(withJunk.report.unknownColumns.includes('Transfer Value'), '인식 못한 열을 보고하지 않았다');
@@ -283,6 +314,20 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   const bumped = IMP.mergeSquad(second.players, [{ name: '김선수', positions: ['MC'], attrs: { pas: 17 } }]);
   assert.equal(bumped.players[0].attrs.pas, 17, '새로 가져온 값이 반영되지 않았다');
   assert.equal(bumped.filled, 0, '이미 있던 값을 새로 채운 것으로 셌다');
+
+  // 간편 입력으로 채운 자리에 진짜 값이 들어오면 '추정값' 표시가 사라져야 한다
+  const estimated = [{
+    name: '박선수', positions: ['ST'],
+    attrs: { fin: 10, pac: 10, acc: 10 },
+    quickAttrs: { fin: 1, pac: 1, acc: 1 }
+  }];
+  const real = IMP.mergeSquad(estimated, [{ name: '박선수', positions: ['ST'], attrs: { fin: 17, pac: 16 } }]);
+  const rp = real.players[0];
+  assert.equal(rp.attrs.fin, 17, '진짜 값이 추정값을 덮어쓰지 못했다');
+  assert.equal(rp.quickAttrs.fin, undefined, '진짜 값이 들어왔는데 추정 표시가 남아 있다');
+  assert.equal(rp.quickAttrs.pac, undefined, '진짜 값이 들어왔는데 추정 표시가 남아 있다');
+  assert.equal(rp.quickAttrs.acc, 1, '아직 추정값인 항목의 표시가 지워졌다');
+  assert.equal(estimated[0].quickAttrs.fin, 1, 'mergeSquad가 입력의 추정 표시를 변경했다');
 }
 
 // ── 테스트용 스쿼드 ───────────────────────────────────────────────────────
