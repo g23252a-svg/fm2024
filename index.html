@@ -225,6 +225,11 @@ input[type=range]{width:100%;accent-color:var(--acc2);background:transparent}
 .warn.high{background:rgba(248,113,113,.08);border-color:#4a2226}
 .warn .ic{flex:0 0 auto;font-weight:800}
 .warn.high .ic{color:var(--danger)} .warn .ic{color:var(--warn)}
+.fixnote{display:block;margin-top:4px;color:var(--dim);font-size:12px}
+details.card>summary{list-style:none;display:flex;align-items:baseline;gap:2px}
+details.card>summary::-webkit-details-marker{display:none}
+details.card>summary::after{content:'▾';margin-left:auto;color:var(--dim2);font-size:11px}
+details.card[open]>summary::after{content:'▴'}
 
 .pi{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:7px}
 .pi h4{font-size:13px;margin-bottom:6px}
@@ -372,6 +377,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
 <script src="data/roles.js"></script>
 <script src="data/formations.js"></script>
+<script src="data/setpieces.js"></script>
 <script src="data/tactics.js"></script>
 <script src="engine.js"></script>
 <script src="importer.js"></script>
@@ -1533,6 +1539,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
     // 경고
     if (res.warnings.length) root.appendChild(warningsCard(res.warnings));
+    var spc = setPieceCard(res.xi);
+    if (spc) root.appendChild(spc);
 
     // 상대 대응
     var bc = h('div', { class: 'card' }, [
@@ -1853,6 +1861,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ]));
     }
     if (res.warnings.length) root.appendChild(warningsCard(res.warnings));
+    var spc = setPieceCard(res.xi);
+    if (spc) root.appendChild(spc);
 
     var lc = h('div', { class: 'card' }, [
       h('h2', { text: '포지션별 역할과 임무' }),
@@ -2138,10 +2148,83 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     warnings.forEach(function (w) {
       wc.appendChild(h('div', { class: 'warn' + (w.level === 'high' ? ' high' : '') }, [
         h('span', { class: 'ic', text: w.level === 'high' ? '!' : '·' }),
-        h('span', { text: w.text })
+        // 무엇이 잘못됐는지만 알려 주면 화면 앞에서 다시 막힙니다.
+        h('span', {}, [w.text, w.fix ? h('span', { class: 'fixnote', text: '→ ' + w.fix }) : null])
       ]));
     });
     return wc;
+  }
+
+  // ── 세트피스 ────────────────────────────────────────────────────────────
+  function setPieceCard(xi) {
+    var sp;
+    try { sp = E.setPieces(xi); } catch (e) { return null; }
+    if (!sp) return null;
+    var anyPick = sp.attack.concat(sp.defence, sp.specialists)
+      .some(function (s) { return s.picks.length; });
+    if (!anyPick) return null;
+
+    function group(title, desc, rows) {
+      var box = h('div', { style: 'margin-top:12px' }, [
+        h('div', { style: 'font-size:12px;font-weight:800;margin-bottom:3px', text: title }),
+        h('div', { class: 'tiny muted', style: 'margin-bottom:7px', text: desc })
+      ]);
+      rows.forEach(function (s) {
+        var val = s.picks.length
+          ? s.picks.map(function (p) { return p.name; }).join(', ')
+          : '조건을 넘는 선수가 없습니다';
+        box.appendChild(h('details', { class: 'help' }, [
+          h('summary', {}, [
+            h('span', { style: 'font-weight:700', text: s.ko }),
+            h('span', { class: 'tiny muted', text: '  ' + s.fm }),
+            h('div', { style: 'font-size:12.5px;color:' + (s.picks.length ? 'var(--text)' : 'var(--dim2)'), text: val })
+          ]),
+          h('div', { class: 'body' }, [
+            h('div', { class: 'tiny', style: 'color:var(--dim)', text: s.why }),
+            s.picks.length ? h('div', { class: 'tiny muted', style: 'margin-top:4px',
+              text: s.picks.map(function (p) { return p.name + ' · ' + p.pos + ' ' + p.role; }).join(' / ') }) : null,
+            (!s.picks.length && s.need) ? h('div', { class: 'tiny muted', style: 'margin-top:4px',
+              text: '최소 기준: ' + Object.keys(s.need).map(function (k) {
+                return (RD.ATTRS[k] ? RD.ATTRS[k].ko : k) + ' ' + s.need[k];
+              }).join(' · ') }) : null
+          ])
+        ]));
+      });
+      return box;
+    }
+
+    function line(cls, icon, text, fix) {
+      return h('div', { class: cls }, [
+        h('span', { class: 'ic', text: icon }),
+        h('span', {}, [text, fix ? h('span', { class: 'fixnote', text: '→ ' + fix }) : null])
+      ]);
+    }
+
+    var card = h('details', { class: 'card' });
+    card.appendChild(h('summary', { style: 'cursor:pointer' }, [
+      h('span', { style: 'font-size:15px;font-weight:800', text: '세트피스' }),
+      sp.verdict ? h('span', { class: 'tiny muted', text: '  ' + (sp.verdict.level === 'good' ? '이 팀의 득점 경로'
+        : sp.verdict.level === 'mid' ? '덤' : '기대하기 어려움') }) : null
+    ]));
+    card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px',
+      text: '선발 11명만 보고 정합니다. FM 전술 → 세트피스에서 같은 자리에 이 선수를 넣으면 됩니다(게임 언어가 달라도 찾을 수 있게 영문 표기를 같이 적었습니다).' }));
+
+    if (sp.verdict) {
+      card.appendChild(line(sp.verdict.level === 'good' ? 'warn high' : 'warn',
+        sp.verdict.level === 'good' ? '★' : '·', sp.verdict.text, sp.verdict.fix));
+    }
+    sp.swing.forEach(function (s) { card.appendChild(line('warn', '·', s.text, s.fix)); });
+    if (sp.weakDefence) card.appendChild(line('warn high', '!', sp.weakDefence.text, sp.weakDefence.fix));
+
+    card.appendChild(group('공격 코너', '박스 안 셋 + 가장자리 하나 + 뒤 둘. 한 사람이 두 자리를 겸하지 않습니다.', sp.attack));
+    card.appendChild(group('수비 코너', '맨마킹 셋에 니어 포스트·가장자리·앞에 남길 한 명씩.', sp.defence));
+    card.appendChild(group('프리킥 · 페널티 · 스로인', '이쪽은 같은 선수가 여러 개를 겸해도 됩니다.', sp.specialists));
+
+    if (sp.known < 6) {
+      card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:9px',
+        text: '능력치를 아는 선발이 ' + sp.known + '명뿐이라 일부 자리는 비워 뒀습니다 — 모르는 값으로 지정하면 엉뚱한 선수가 키커가 됩니다.' }));
+    }
+    return card;
   }
 
   function instructionsCard(instructions) {
@@ -2233,9 +2316,35 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (res.warnings.length) {
       L.push('');
       L.push('[점검할 점]');
-      res.warnings.forEach(function (w) { L.push('  ! ' + w.text); });
+      res.warnings.forEach(function (w) {
+        L.push('  ! ' + w.text);
+        if (w.fix) L.push('      → ' + w.fix);
+      });
     }
+    appendSetPieces(L, res.xi);
     writeClipboard(L.join('\n'));
+  }
+
+  // 복사한 글에도 세트피스를 넣습니다 — FM 화면 옆에 붙여 놓고 그대로 따라
+  // 치는 용도라, 화면에만 있으면 정작 쓸 때 없습니다.
+  function appendSetPieces(L, xi) {
+    var sp;
+    try { sp = E.setPieces(xi); } catch (e) { return; }
+    if (!sp) return;
+    var rows = [['공격 코너', sp.attack], ['수비 코너', sp.defence], ['프리킥·페널티·스로인', sp.specialists]];
+    if (!rows.some(function (r) { return r[1].some(function (x) { return x.picks.length; }); })) return;
+    L.push('');
+    L.push('[세트피스]');
+    if (sp.verdict) L.push('  ' + sp.verdict.text);
+    sp.swing.forEach(function (x) { L.push('  ' + x.text); });
+    if (sp.weakDefence) L.push('  ! ' + sp.weakDefence.text);
+    rows.forEach(function (r) {
+      L.push('  · ' + r[0]);
+      r[1].forEach(function (x) {
+        L.push('      ' + x.ko + ' (' + x.fm + '): '
+          + (x.picks.length ? x.picks.map(function (p) { return p.name; }).join(', ') : '조건을 넘는 선수 없음'));
+      });
+    });
   }
 
   // ── 경기 중 탭 ──────────────────────────────────────────────────────────
@@ -2569,6 +2678,11 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
                   if (d.players) S.players = d.players;
                   if (d.opponent) Object.assign(S.opponent, d.opponent);
                   if (d.context) Object.assign(S.context, d.context);
+                  if (d.standing) S.standing = d.standing;
+                  if (d.pinnedFormation !== undefined) S.pinnedFormation = d.pinnedFormation;
+                  if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
+                  if (d.match) Object.assign(S.match, d.match);
+                  S._baseCache = null; S._needsCache = null;
                   save(); render(); toast('불러왔습니다.');
                 } catch (e) { toast('파일을 읽지 못했습니다.'); }
               };
@@ -2582,9 +2696,17 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     ]));
   };
 
+  /*
+   * 백업에는 화면에서 손으로 정한 것이 전부 들어가야 합니다.
+   * 예전에는 players/opponent/context만 담아서, 리그 내 위치와 고정한 포메이션이
+   * 조용히 빠졌습니다 — 브라우저 데이터를 지우면 그 설정만 복구가 안 됐습니다.
+   */
   function exportJson() {
     var blob = new Blob([JSON.stringify({
-      players: S.players, opponent: S.opponent, context: S.context
+      version: 2,
+      players: S.players, opponent: S.opponent, context: S.context,
+      standing: S.standing, pinnedFormation: S.pinnedFormation,
+      opponentSquad: S.opponentSquad, match: S.match
     }, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -2635,10 +2757,15 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (res.warnings.length) {
       L.push('');
       L.push('[점검할 점]');
-      res.warnings.forEach(function (w) { L.push('  ! ' + w.text); });
+      res.warnings.forEach(function (w) {
+        L.push('  ! ' + w.text);
+        if (w.fix) L.push('      → ' + w.fix);
+      });
     }
+    appendSetPieces(L, res.xi);
     writeClipboard(L.join('\n'));
   }
+
 
   function writeClipboard(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {

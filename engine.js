@@ -82,6 +82,18 @@
     if (f === null) return '은';
     return f === '' ? '는' : '은';
   }
+  // '와/과' — 받침이 있으면 '과'.
+  function wa(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '과';
+    return f === '' ? '와' : '과';
+  }
+  // '라/이라' — 서술격. '딥 라잉 포워드라' / '앵커 맨이라'.
+  function ira(word) {
+    var f = finalConsonant(word);
+    if (f === null) return '이라';
+    return f === '' ? '라' : '이라';
+  }
 
   // 포지션 인접표 — 등록되지 않은 포지션이라도 여기 연결돼 있으면 부분 점수를 줍니다.
   var ADJACENT = {
@@ -936,6 +948,9 @@
     var counts = { playmaker: 0, 'no-defence': 0 };
     var attackDuties = 0, wideAttacking = 0, dmSlots = 0, dmAnchored = 0;
     var mcSlots = 0, mcHolder = 0;
+    // 형태가 성립하려면 반드시 있어야 하는 것들.
+    var widthHolders = 0, runners = 0, strikers = 0, droppingStrikers = 0;
+    var narrowSide = { l: 0, r: 0 };
 
     for (var i = 0; i < slots.length; i++) {
       var s = slots[i], role = s.choice.role, duty = s.choice.duty;
@@ -947,6 +962,19 @@
       if (tags.indexOf('playmaker') >= 0) counts.playmaker++;
       if (tags.indexOf('no-defence') >= 0) counts['no-defence']++;
       if (duty === 'a') attackDuties++;
+
+      var goesIn = tags.indexOf('inverted') >= 0 || tags.indexOf('narrow-drift') >= 0;
+      if (!goesIn && (tags.indexOf('width') >= 0 || tags.indexOf('overlap') >= 0 || tags.indexOf('crosser') >= 0)
+          && duty !== 'd') widthHolders++;
+      if (tags.indexOf('in-behind') >= 0 || tags.indexOf('runner') >= 0
+          || tags.indexOf('late-run') >= 0 || tags.indexOf('poacher-wide') >= 0) runners++;
+      if (s.slot.pos === 'ST') {
+        strikers++;
+        if (tags.indexOf('drop-deep') >= 0) droppingStrikers++;
+      }
+      if (goesIn && ['DR', 'DL', 'WBR', 'WBL', 'MR', 'ML', 'AMR', 'AML'].indexOf(s.slot.pos) >= 0) {
+        narrowSide[s.slot.pos.slice(-1) === 'L' ? 'l' : 'r']++;
+      }
 
       if (['DR', 'DL', 'WBR', 'WBL'].indexOf(s.slot.pos) >= 0) {
         if (duty === 'a' || tags.indexOf('risk-back') >= 0) wideAttacking++;
@@ -974,6 +1002,20 @@
     if (dmSlots > 0 && dmAnchored === 0) pen += 24;
     // 수비형 미드필더 자리가 없고 중앙이 셋 이상인데 균형을 잡는 사람이 없는 조합.
     if (!fSum.dm && mcSlots >= 3 && mcHolder === 0) pen += 18;
+
+    /*
+     * 아래 넷은 "적합도가 아무리 높아도 형태가 성립하지 않는" 조합입니다.
+     * 역할 적합도만 보면 인버티드 계열이 능력치 좋은 선수에게 잘 붙어서,
+     * 양쪽 측면이 모두 안으로 들어오는 11명이 태연히 1등을 합니다.
+     */
+    // 아무도 폭을 잡지 않으면 상대 블록이 좌우로 늘어나지 않습니다.
+    if (widthHolders === 0) pen += 40;
+    // 뒷공간으로 달리는 사람이 없으면 최종 패스를 넣을 곳이 없습니다.
+    if (runners === 0) pen += 34;
+    // 한쪽 측면의 앞뒤가 모두 안으로 들어오면 그 측면이 통째로 빕니다.
+    ['l', 'r'].forEach(function (side) { if (narrowSide[side] >= 2) pen += 30; });
+    // 최전방이 전부 내려오는데 그 공간을 쓸 사람이 없는 조합.
+    if (strikers > 0 && droppingStrikers === strikers && runners === 0) pen += 26;
 
     return pen;
   }
@@ -1283,19 +1325,163 @@
     }
   }
 
+  /*
+   * ── 역할 조합 충돌 검사 ─────────────────────────────────────────────────
+   *
+   * 지시나 상대를 보지 않고 11자리의 역할·임무만으로 판정합니다.
+   * 개별 규칙을 그때그때 덧붙이던 방식은 새 조합이 생길 때마다 조용히 새는데,
+   * 여기서는 "무엇이 있어야 하는가"를 한자리에 모아 한 번에 셉니다.
+   *
+   * 각 항목에 fix(무엇을 하면 되는가)를 함께 답니다 — 무엇이 잘못됐는지만
+   * 알려 주고 끝내면 화면 앞에서 다시 막힙니다.
+   */
+  function chemistry(xi) {
+    var out = [];
+    var lineup = xi.lineup;
+    function tagsOf(l) { return l.role.tags || []; }
+    function count(tag) { return lineup.filter(function (l) { return tagsOf(l).indexOf(tag) >= 0; }).length; }
+    function countAny(list) {
+      return lineup.filter(function (l) {
+        return list.some(function (t) { return tagsOf(l).indexOf(t) >= 0; });
+      }).length;
+    }
+    function at(pos) { return lineup.filter(function (l) { return l.slot.pos === pos; })[0] || null; }
+    function add(kind, level, text, fix) { out.push({ kind: kind, level: level, text: text, fix: fix }); }
+
+    // ── 있어야 할 것이 없는 경우 ──
+    // 폭을 잡는 사람. 아무도 없으면 상대 블록이 좌우로 늘어나지 않아
+    // 중앙이 영원히 닫혀 있습니다.
+    var widthHolders = lineup.filter(function (l) {
+      var t = tagsOf(l);
+      if (t.indexOf('inverted') >= 0 || t.indexOf('narrow-drift') >= 0) return false;
+      return t.indexOf('width') >= 0 || t.indexOf('overlap') >= 0 || t.indexOf('crosser') >= 0;
+    });
+    if (widthHolders.length === 0) {
+      add('no-width', 'high',
+        '측면 폭을 잡는 선수가 한 명도 없습니다 — 열한 명이 전부 안쪽에 섭니다.',
+        '측면 수비 한 명을 윙백이나 풀백(지원 이상)으로 바꾸거나, 측면 공격수 한 명을 윙어로 돌리세요.');
+    }
+
+    // 뒷공간으로 달리는 사람. 없으면 최종 패스를 넣을 곳 자체가 없습니다.
+    if (countAny(['in-behind', 'runner', 'late-run', 'poacher-wide']) === 0) {
+      add('no-runner', 'high',
+        '앞으로 달려 들어가는 역할이 없습니다 — 상대 수비 라인을 뒤로 밀 사람이 없어 전방에 패스를 넣을 공간이 생기지 않습니다.',
+        '최전방을 어드밴스드 포워드·포처 계열로 바꾸거나, 2선에 섀도 스트라이커를 넣으세요.');
+    }
+
+    // 경기를 만드는 사람.
+    if (countAny(['creator', 'creator-deep', 'playmaker']) === 0) {
+      add('no-creator', 'mid',
+        '공격을 만드는 역할이 없습니다 — 볼을 앞으로 옮길 수는 있어도 마지막 패스를 넣을 사람이 없습니다.',
+        '중원 한 자리를 어드밴스드 플레이메이커나 딥 라잉 플레이메이커로 바꾸세요.');
+    }
+
+    // 박스 안 제공권. 크로스·세트피스가 전부 여기에 걸립니다.
+    if (countAny(['aerial', 'target']) === 0) {
+      add('no-aerial', 'mid',
+        '박스 안에서 공중볼을 다툴 역할이 없습니다 — 크로스와 코너킥이 그대로 상대 공이 됩니다.',
+        '최전방을 타깃 포워드·컴플리트 포워드 계열로 바꾸거나, 크로스 위주 방향을 접고 땅으로 들어가세요.');
+    }
+
+    // ── 너무 많은 경우 ──
+    var attackDuties = lineup.filter(function (l) { return l.duty === 'a'; }).length;
+    if (attackDuties === 0) {
+      add('no-attack-duty', 'high',
+        '공격 임무가 한 명도 없습니다 — 박스 안으로 들어가는 선수가 없어 크로스와 컷백이 전부 낭비됩니다.',
+        '최전방이나 2선 한 자리를 공격 임무로 올리세요.');
+    } else if (attackDuties >= 5) {
+      add('too-many-attack-duty', 'mid',
+        '공격 임무가 ' + attackDuties + '명입니다 — 뺏겼을 때 되돌아올 사람이 부족합니다.',
+        '측면 수비 한쪽을 지원이나 수비로 내리세요. 양쪽을 동시에 올린 상태가 가장 위험합니다.');
+    }
+
+    if (count('no-defence') >= 2) {
+      add('no-defence', 'high',
+        '수비에 가담하지 않는 역할이 둘 이상입니다 — 수비 시 사실상 9명으로 싸우게 됩니다.',
+        '둘 중 하나를 압박에 가담하는 역할(프레싱 포워드 · 인사이드 포워드)로 바꾸세요.');
+    }
+    if (count('playmaker') >= 3) {
+      add('too-many-playmakers', 'mid',
+        '플레이메이커 계열이 셋입니다 — 볼이 한 곳으로 모이지 않고 분산돼 오히려 공격 경로가 흐려집니다.',
+        '하나만 남기고 나머지는 볼을 앞으로 나르는 역할(박스 투 박스 · 카릴레로)로 바꾸세요.');
+    }
+    if (count('roam') >= 3) {
+      add('too-many-roam', 'mid',
+        '자유롭게 움직이는 역할이 ' + count('roam') + '명입니다 — 서로 같은 공간으로 흘러 대형이 유지되지 않습니다.',
+        '중원에 자리를 지키는 역할(앵커 맨 · 카릴레로 · 딥 라잉 플레이메이커)을 하나 두세요.');
+    }
+
+    // ── 서로 부딪히는 경우 ──
+    // 같은 측면에서 앞뒤가 모두 안쪽으로 들어오면 그 측면이 통째로 빕니다.
+    ['l', 'r'].forEach(function (side) {
+      var sideKo = side === 'l' ? '왼쪽' : '오른쪽';
+      var wideAtt = at(side === 'l' ? 'AML' : 'AMR') || at(side === 'l' ? 'ML' : 'MR');
+      var back = at(side === 'l' ? 'DL' : 'DR') || at(side === 'l' ? 'WBL' : 'WBR');
+      if (!wideAtt || !back) return;
+      var attIn = tagsOf(wideAtt).some(function (t) { return t === 'inverted' || t === 'narrow-drift'; });
+      var backIn = tagsOf(back).indexOf('inverted') >= 0;
+      var backStays = back.duty === 'd';
+      if (attIn && backIn) {
+        add('both-inverted-' + side, 'high',
+          sideKo + ' 측면에서 ' + wideAtt.role.ko + wa(wideAtt.role.ko) + ' ' + back.role.ko + iga(back.role.ko) + ' 둘 다 안으로 들어옵니다 — 그쪽 측면에 아무도 없습니다.',
+          '뒤를 일반 풀백이나 윙백으로 바꿔 폭을 맡기세요. 둘 다 안쪽 역할이면 오버랩·언더랩 어느 쪽도 켤 수 없습니다.');
+      } else if (attIn && backStays) {
+        add('side-no-width-' + side, 'mid',
+          sideKo + ' 측면에서 ' + wideAtt.role.ko + iga(wideAtt.role.ko) + ' 안으로 들어오는데 뒤의 ' + back.role.ko + eun(back.role.ko) + ' 올라가지 않습니다 — 그쪽 폭이 사라집니다.',
+          '뒤의 임무를 지원 이상으로 올리고 그쪽 오버랩을 켜세요.');
+      }
+    });
+
+    // 양쪽 측면 수비가 모두 올라가는데 앞을 받칠 사람이 없는 경우
+    var backs = ['DR', 'DL', 'WBR', 'WBL'].map(at).filter(Boolean);
+    var bothUp = backs.filter(function (l) { return l.duty === 'a'; }).length >= 2;
+    var hasHolder = lineup.some(function (l) {
+      return ['DM', 'MC'].indexOf(l.slot.pos) >= 0
+        && (tagsOf(l).indexOf('holder') >= 0 || tagsOf(l).indexOf('defensive-cover') >= 0 || l.duty === 'd');
+    });
+    if (bothUp && !hasHolder) {
+      add('no-cover-behind', 'high',
+        '양쪽 측면 수비가 모두 공격 임무인데 그 앞을 받칠 중원이 없습니다 — 뺏기면 센터백 둘이 그대로 노출됩니다.',
+        '수비형 미드필더 한 명을 수비 임무(앵커 맨 · 홀딩 미드필더)로 두거나, 한쪽 측면 수비를 지원으로 내리세요.');
+    }
+
+    // 최전방이 내려오는데 그 공간을 쓸 사람이 없는 경우
+    var st = lineup.filter(function (l) { return l.slot.pos === 'ST'; });
+    var dropping = st.filter(function (l) { return tagsOf(l).indexOf('drop-deep') >= 0; });
+    if (dropping.length && st.length === dropping.length
+        && countAny(['runner', 'late-run', 'in-behind']) === 0) {
+      add('empty-front', 'high',
+        '최전방이 ' + dropping[0].role.ko + ira(dropping[0].role.ko) + ' 내려오는데 그 빈 공간으로 들어갈 선수가 없습니다 — 상대 센터백이 아무도 안 따라 나옵니다.',
+        '2선이나 측면에 침투하는 역할(섀도 스트라이커 · 인사이드 포워드 공격 · 메잘라)을 넣거나, 최전방을 앞에 남는 역할로 바꾸세요.');
+    }
+
+    // ── 세트피스를 찰 사람 ──
+    var bestCorner = 0, bestFk = 0, known = 0;
+    lineup.forEach(function (l) {
+      var a = (l.player && l.player.attrs) || {};
+      if (l.slot.pos === 'GK') return;
+      if (typeof a.cor === 'number' && a.cor > 0) { known++; bestCorner = Math.max(bestCorner, a.cor); }
+      if (typeof a.fre === 'number' && a.fre > 0) bestFk = Math.max(bestFk, a.fre);
+    });
+    // 능력치를 모르는 스쿼드에서 "키커가 없다"고 말하면 안 됩니다.
+    if (known >= 6 && bestCorner < 11) {
+      add('no-setpiece-taker', 'mid',
+        '선발 중 코너킥이 가장 높은 값이 ' + bestCorner + '입니다 — 세트피스에서 얻을 것이 거의 없습니다.',
+        '코너킥이 되는 선수를 선발에 넣거나, 코너를 짧게 처리하는 쪽으로 두세요. 세트피스 노리기를 켤 상황은 아닙니다.');
+    }
+
+    return out;
+  }
+
   // ── 팀 밸런스 경고 ────────────────────────────────────────────────────
+  // 조합 자체의 문제는 chemistry()가 보고, 여기서는 지시·상대·선수 상태와
+  // 부딪히는 것만 봅니다.
   function balanceWarnings(xi, axes, toggles, squad, opp) {
-    var w = [];
+    var w = chemistry(xi).map(function (c) {
+      return { level: c.level, text: c.text, fix: c.fix, kind: c.kind };
+    });
     var lineup = xi.lineup;
     function has(tag) { return lineup.some(function (l) { return (l.role.tags || []).indexOf(tag) >= 0; }); }
-    function count(tag) { return lineup.filter(function (l) { return (l.role.tags || []).indexOf(tag) >= 0; }).length; }
-
-    var attackDuties = lineup.filter(function (l) { return l.duty === 'a'; }).length;
-    if (attackDuties === 0) w.push({ level: 'high', text: '공격 임무가 한 명도 없습니다 — 박스 안으로 들어가는 선수가 없어 크로스와 컷백이 전부 낭비됩니다.' });
-    else if (attackDuties >= 5) w.push({ level: 'mid', text: '공격 임무가 ' + attackDuties + '명입니다 — 뺏겼을 때 되돌아올 사람이 부족합니다.' });
-
-    if (count('no-defence') >= 2) w.push({ level: 'high', text: '수비에 가담하지 않는 역할이 둘 이상입니다 — 수비 시 사실상 9명으로 싸우게 됩니다.' });
-    if (count('playmaker') >= 3) w.push({ level: 'mid', text: '플레이메이커 계열이 셋입니다 — 볼이 몰릴 곳이 분산돼 오히려 공격 경로가 흐려집니다.' });
 
     if (axes.dline.index >= 3) {
       var gkRole = lineup.filter(function (l) { return l.slot.pos === 'GK'; })[0];
@@ -1313,25 +1499,6 @@
       w.push({ level: 'high', text: '상대가 강하게 전방 압박하는데 후방 짧은 패스가 켜져 있습니다 — 둘 중 하나는 정리해야 합니다.' });
     }
 
-    // 측면 폭이 양쪽 다 사라지는 조합
-    ['l', 'r'].forEach(function (side) {
-      var wideAtt = lineup.filter(function (l) {
-        return l.slot.pos === (side === 'l' ? 'AML' : 'AMR') || l.slot.pos === (side === 'l' ? 'ML' : 'MR');
-      })[0];
-      var back = lineup.filter(function (l) {
-        return l.slot.pos === (side === 'l' ? 'DL' : 'DR') || l.slot.pos === (side === 'l' ? 'WBL' : 'WBR');
-      })[0];
-      if (!wideAtt || !back) return;
-      var inverted = (wideAtt.role.tags || []).some(function (t) { return t === 'inverted' || t === 'narrow-drift'; });
-      var backStaysIn = back.duty === 'd' || (back.role.tags || []).indexOf('inverted') >= 0;
-      if (inverted && backStaysIn) {
-        w.push({
-          level: 'mid',
-          text: (side === 'l' ? '왼쪽' : '오른쪽') + ' 측면에서 ' + wideAtt.role.ko + '가 안으로 들어오는데 뒤의 ' + back.role.ko + '도 올라가지 않습니다 — 그쪽 폭이 완전히 사라집니다.'
-        });
-      }
-    });
-
     if (!has('target') && !has('aerial') && (toggles.cr_float.on || toggles.cr_byline.on || toggles.hec.on)) {
       w.push({ level: 'mid', text: '크로스 지시를 켰지만 박스 안에 제공권 자원이 없습니다 — 크로스가 그대로 상대 공이 됩니다.' });
     }
@@ -1343,12 +1510,42 @@
       return heavy && typeof v === 'number' && v > 0 && v < 13;
     });
     lowStamina.forEach(function (l) {
-      w.push({ level: 'mid', text: l.player.name + '은(는) ' + l.role.ko + '인데 스태미너가 ' + l.player.attrs.sta + '입니다 — 60~65분 교체를 미리 준비하세요.' });
+      w.push({
+        level: 'mid',
+        text: l.player.name + eun(l.player.name) + ' ' + l.role.ko + '인데 스태미너가 ' + l.player.attrs.sta + '입니다 — 60~65분 교체를 미리 준비하세요.',
+        fix: '스태미너가 높은 선수로 그 자리를 바꾸거나, 활동량이 적은 역할로 내리세요.'
+      });
     });
 
+    /*
+     * 포지션을 아예 모르는 것과 등록 포지션이 아닌 자리에 세운 것은 다릅니다.
+     * 앞엣것은 내보내기에 포지션 열이 없다는 뜻이라 선수마다 한 줄씩 띄우면
+     * 같은 말이 열한 번 반복됩니다 — 한 줄로 묶고 무엇을 하면 되는지만 말합니다.
+     */
+    var unknownPos = lineup.filter(function (l) {
+      return l.player && !(l.player.positions && l.player.positions.length);
+    });
+    if (unknownPos.length >= 3) {
+      w.push({
+        level: 'high',
+        text: '선발 ' + unknownPos.length + '명의 등록 포지션을 모릅니다 — 지금 배치는 능력치만 보고 짠 것이라 실제로 설 수 없는 자리가 섞여 있습니다.',
+        fix: 'FM 스쿼드 화면 보기에 「포지션」 열을 넣어 한 번만 다시 내보내 주세요. 그 한 번으로 배치가 통째로 정확해집니다.'
+      });
+    }
+
     lineup.forEach(function (l) {
+      // 위에서 한 줄로 묶은 선수는 여기서 다시 말하지 않습니다.
+      if (unknownPos.length >= 3 && l.player && !(l.player.positions && l.player.positions.length)) return;
       if (l.familiarity !== null && l.familiarity < 0.6 && l.player) {
-        w.push({ level: 'mid', text: l.player.name + '은(는) ' + l.slot.pos + ' 자리가 익숙하지 않습니다 — 등록 포지션을 확인하세요.' });
+        var own = (l.player.positions || []).join(' · ');
+        w.push({
+          level: 'mid',
+          text: l.player.name + eun(l.player.name) + ' ' + l.slot.pos + ' 자리가 익숙하지 않습니다'
+            + (own ? ' (등록 포지션 ' + own + ')' : '') + '.',
+          fix: own
+            ? '그 자리에 맞는 선수로 바꾸거나, FM에서 이 선수에게 ' + l.slot.pos + ' 추가 포지션 훈련을 시키세요.'
+            : '등록 포지션을 선수 목록에서 지정해 주세요.'
+        });
       }
     });
 
@@ -1948,6 +2145,176 @@
   }
 
   /*
+   * ── 세트피스 ────────────────────────────────────────────────────────────
+   *
+   * 선발 11명을 받아 코너킥·프리킥·페널티·스로인에 누구를 세울지 냅니다.
+   *
+   * 원칙 두 가지.
+   *  - 능력치를 모르면 비워 둡니다. 모르는 값을 0으로 보면 "능력치가 낮은
+   *    선수"와 구분되지 않아 엉뚱한 사람이 키커가 됩니다.
+   *  - 한 사람이 두 자리를 겸하지 않습니다. 키커가 박스 안에 있을 수 없습니다.
+   */
+  function spScore(player, spec) {
+    var a = (player && player.attrs) || {};
+    var sum = 0, wsum = 0, seen = 0;
+    Object.keys(spec.weight).forEach(function (id) {
+      var v = a[id];
+      var w = spec.weight[id];
+      wsum += w;
+      if (typeof v === 'number' && v > 0) { sum += v * w; seen++; }
+    });
+    if (!seen || !wsum) return null;
+    // 값을 아는 항목이 절반도 안 되면 판단하지 않습니다.
+    if (seen < Math.ceil(Object.keys(spec.weight).length / 2)) return null;
+    return Math.round((sum / wsum) * 10) / 10;
+  }
+
+  function meetsNeed(player, spec) {
+    if (!spec.need) return true;
+    var a = (player && player.attrs) || {};
+    return Object.keys(spec.need).every(function (id) {
+      var v = a[id];
+      // 모르는 값은 막지 않습니다 — 능력치를 안 넣은 스쿼드에서 전부 비어 버립니다.
+      return typeof v !== 'number' || v <= 0 || v >= spec.need[id];
+    });
+  }
+
+  function assignSetPiece(specs, pool) {
+    var taken = {};
+    return specs.map(function (spec) {
+      var picks = [];
+      for (var n = 0; n < (spec.count || 1); n++) {
+        var best = null, bestScore = -1;
+        pool.forEach(function (p) {
+          if (!p.player || taken[p.player.name]) return;
+          if (!meetsNeed(p.player, spec)) return;
+          var s = spScore(p.player, spec);
+          if (s === null) return;
+          if (s > bestScore) { bestScore = s; best = p; }
+        });
+        if (!best) break;
+        taken[best.player.name] = 1;
+        picks.push({ name: best.player.name, pos: best.slot.pos, role: best.role.ko, score: bestScore });
+      }
+      return { id: spec.id, ko: spec.ko, fm: spec.fm, why: spec.why, need: spec.need || null, picks: picks };
+    });
+  }
+
+  /*
+   * 오른쪽 코너를 왼발잡이가 차면 공이 골문 쪽으로 감겨 들어옵니다(인스윙).
+   * 같은 발이면 골문에서 멀어지며 나갑니다(아웃스윙). 둘은 노려야 할 자리가
+   * 다르므로, 발을 알면 여기까지 말해 줘야 배치가 맞물립니다.
+   */
+  function swingNote(taker, side) {
+    if (!taker) return null;
+    var foot = taker.foot;
+    if (foot !== 'L' && foot !== 'R') return null;
+    var sideKo = side === 'r' ? '오른쪽' : '왼쪽';
+    var inswing = (side === 'r' && foot === 'L') || (side === 'l' && foot === 'R');
+    return inswing
+      ? {
+        side: side, kind: 'in',
+        text: sideKo + ' 코너는 ' + (foot === 'L' ? '왼발' : '오른발') + '잡이가 차면 인스윙입니다 — 공이 골문 쪽으로 감겨 들어옵니다.',
+        fix: '니어 포스트로 달려드는 선수와 골키퍼 방해를 살리세요. 공이 이미 골문으로 오므로 먼저 닿기만 하면 됩니다.'
+      }
+      : {
+        side: side, kind: 'out',
+        text: sideKo + ' 코너는 ' + (foot === 'L' ? '왼발' : '오른발') + '잡이가 차면 아웃스윙입니다 — 공이 골문에서 멀어지며 나옵니다.',
+        fix: '파 포스트로 달려드는 선수와 박스 가장자리 대기를 살리세요. 골키퍼가 나와서 잡기 어려운 궤적입니다.'
+      };
+  }
+
+  function setPieces(xi) {
+    var SP = root.FM_SETPIECE_DATA;
+    if (!SP || !xi || !xi.lineup) return null;
+
+    var outfield = xi.lineup.filter(function (l) { return l.slot.pos !== 'GK' && l.player; });
+    var all = xi.lineup.filter(function (l) { return l.player; });
+
+    var attack = assignSetPiece(SP.ATT_CORNER, outfield);
+    var defence = assignSetPiece(SP.DEF_CORNER, outfield);
+    // 전문 키커는 서로 겸할 수 있습니다 — FM에서도 같은 선수가 프리킥과 페널티를
+    // 함께 차는 것이 보통입니다. 그래서 자리를 나눠 갖지 않고 각각 최고를 뽑습니다.
+    var specialists = SP.SPECIALISTS.map(function (spec) {
+      var best = null, bestScore = -1;
+      outfield.forEach(function (p) {
+        if (!meetsNeed(p.player, spec)) return;
+        var s = spScore(p.player, spec);
+        if (s === null) return;
+        if (s > bestScore) { bestScore = s; best = p; }
+      });
+      return {
+        id: spec.id, ko: spec.ko, fm: spec.fm, why: spec.why, need: spec.need || null,
+        picks: best ? [{ name: best.player.name, pos: best.slot.pos, role: best.role.ko, score: bestScore }] : []
+      };
+    });
+
+    // 코너 키커의 발 — 인스윙/아웃스윙 판단
+    var takerName = (attack[0] && attack[0].picks[0]) ? attack[0].picks[0].name : null;
+    var taker = takerName ? (all.filter(function (l) { return l.player.name === takerName; })[0] || {}).player : null;
+    var swing = [swingNote(taker, 'l'), swingNote(taker, 'r')].filter(Boolean);
+
+    /*
+     * 이 팀이 세트피스로 먹고살 팀인지 진단합니다.
+     * 「세트피스 노리기」를 켤지가 여기서 갈립니다 — 제공권 자원이 없는데 켜면
+     * 공격 방향만 단순해지고 얻는 것이 없습니다.
+     */
+    function aerialOf(l) {
+      var a = (l.player && l.player.attrs) || {};
+      if (typeof a.hea !== 'number' || typeof a.jum !== 'number' || a.hea <= 0 || a.jum <= 0) return null;
+      return (a.hea + a.jum) / 2;
+    }
+    var aerials = outfield.map(aerialOf).filter(function (v) { return v !== null; });
+    var box = aerials.slice().sort(function (a, b) { return b - a; }).slice(0, 4);
+    var boxMean = box.length ? Math.round((box.reduce(function (s, v) { return s + v; }, 0) / box.length) * 10) / 10 : null;
+    var known = aerials.length;
+
+    var verdict = null;
+    if (known >= 6 && boxMean !== null) {
+      if (boxMean >= 14) {
+        verdict = {
+          level: 'good', mean: boxMean,
+          text: '박스 안 제공권 상위 4명의 평균이 ' + boxMean + '입니다 — 세트피스가 이 팀의 실제 득점 경로입니다.',
+          fix: '팀 지시에서 「세트피스 노리기」를 켜고, 코너를 짧게 처리하지 마세요.'
+        };
+      } else if (boxMean >= 11.5) {
+        verdict = {
+          level: 'mid', mean: boxMean,
+          text: '박스 안 제공권 평균이 ' + boxMean + '입니다 — 세트피스는 덤이지 주 무기는 아닙니다.',
+          fix: '「세트피스 노리기」는 켜지 말고, 뒤지고 있을 때만 경기 중에 켜세요.'
+        };
+      } else {
+        verdict = {
+          level: 'poor', mean: boxMean,
+          text: '박스 안 제공권 평균이 ' + boxMean + '입니다 — 높은 공을 올려 봐야 상대가 걷어냅니다.',
+          fix: '코너는 짧게 처리하고 두 번째 공을 노리세요. 박스 가장자리 대기를 한 명 더 두는 편이 낫습니다.'
+        };
+      }
+    }
+
+    // 수비 세트피스는 별개입니다 — 공격은 골라 넣을 수 있지만 수비는 못 피합니다.
+    var defBox = aerials.slice().sort(function (a, b) { return a - b; });
+    var weakDef = null;
+    if (known >= 8) {
+      var lowCount = aerials.filter(function (v) { return v < 10; }).length;
+      if (lowCount >= 4) {
+        weakDef = {
+          count: lowCount,
+          text: '선발 중 공중볼이 약한 선수가 ' + lowCount + '명입니다 — 상대 코너에서 계속 위험해집니다.',
+          fix: '맨마킹 대신 지역 방어 비중을 늘리고, 앞에 남기는 인원을 하나로 줄여 박스 안 숫자를 확보하세요.'
+        };
+      }
+    }
+    void defBox;
+
+    return {
+      attack: attack, defence: defence, specialists: specialists,
+      swing: swing, verdict: verdict, weakDefence: weakDef,
+      known: known, boxMean: boxMean
+    };
+  }
+
+  /*
    * ── 경기 중 조정 ────────────────────────────────────────────────────────
    *
    * 시간대 · 점수 · 상황 · 전반 기록을 받아 무엇을 건드릴지 냅니다.
@@ -2158,8 +2525,10 @@
     contextualInstructions: contextualInstructions,
     opponentLineupNotes: opponentLineupNotes,
     inMatchAdvice: inMatchAdvice,
+    chemistry: chemistry,
+    setPieces: setPieces,
     splitAvailable: splitAvailable,
-    josa: { ro: ro, eul: eul, iga: iga, eun: eun },
+    josa: { ro: ro, eul: eul, iga: iga, eun: eun, wa: wa, ira: ira },
     generate: generate,
     baseTactic: baseTactic,
     squadNeeds: squadNeeds,

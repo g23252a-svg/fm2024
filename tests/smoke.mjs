@@ -12,12 +12,13 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 // 브라우저에 있는 전역만 넣는다 — 여기 없는 것을 쓰면 실제로도 깨진다.
 const ctx = { window: {}, TextDecoder, TextEncoder, Uint8Array, ArrayBuffer };
 vm.createContext(ctx);
-for (const file of ['data/roles.js', 'data/formations.js', 'data/tactics.js', 'engine.js', 'importer.js']) {
+for (const file of ['data/roles.js', 'data/formations.js', 'data/setpieces.js', 'data/tactics.js', 'engine.js', 'importer.js']) {
   vm.runInContext(read(file), ctx, { filename: file });
 }
-const { FM_ROLE_DATA: RD, FM_FORMATION_DATA: FD, FM_TACTIC_DATA: TD, FM_ENGINE: E, FM_IMPORTER: IMP } = ctx.window;
+const { FM_ROLE_DATA: RD, FM_FORMATION_DATA: FD, FM_TACTIC_DATA: TD,
+  FM_SETPIECE_DATA: SD, FM_ENGINE: E, FM_IMPORTER: IMP } = ctx.window;
 
-assert.ok(RD && FD && TD && E && IMP, '전역이 하나라도 비어 있다');
+assert.ok(RD && FD && TD && SD && E && IMP, '전역이 하나라도 비어 있다');
 
 // ── index.html이 실제 브라우저에서 파싱되는지 ──────────────────────────────
 const html = read('index.html');
@@ -1562,6 +1563,235 @@ function run(opponent = {}, context = {}, players = squad) {
   });
   assert.ok(r.warnings.length > 0, '무리한 조합인데 경고가 없다');
   for (const w of r.warnings) assert.ok(w.text && w.level, '경고 형식이 잘못됐다');
+
+  /*
+   * 포지션 열 없이 내보낸 스쿼드에서는 선발 전원이 "자리가 익숙하지 않습니다"로
+   * 나와 같은 말이 열한 번 반복됐다. 한 줄로 묶고, 무엇을 하면 되는지를 말해야 한다.
+   */
+  const noPos = squad.map((p) => ({ ...p, positions: [] }));
+  const np = E.generate({
+    players: noPos,
+    opponent: { formationId: '4231', traits: [] },
+    context: { venue: 'home', odds: 'even', goal: 'win' }
+  });
+  const famLines = np.warnings.filter((w) => /익숙하지 않습니다/.test(w.text));
+  assert.ok(famLines.length <= 1, `포지션을 모르는데 경고가 ${famLines.length}줄 나왔다`);
+  const grouped = np.warnings.find((w) => /등록 포지션을 모릅니다/.test(w.text));
+  assert.ok(grouped, '포지션을 모른다는 사실을 한 줄로 알려 주지 않는다');
+  assert.ok(/포지션.*열/.test(grouped.fix), `무엇을 하면 되는지가 없다: ${grouped.fix}`);
+
+  // 포지션을 아는 스쿼드에서는 그 묶음 경고가 나오면 안 된다
+  const withPos = E.generate({
+    players: squad,
+    opponent: { formationId: '4231', traits: [] },
+    context: { venue: 'home', odds: 'even', goal: 'win' }
+  });
+  assert.ok(!withPos.warnings.some((w) => /등록 포지션을 모릅니다/.test(w.text)),
+    '포지션을 아는데 모른다고 했다');
+
+  // 조사가 '은(는)' 같은 괄호 형태로 남으면 안 된다
+  for (const w of [...np.warnings, ...withPos.warnings]) {
+    assert.ok(!/[은는이가을를와과]\([은는이가을를와과]\)/.test(w.text + (w.fix || '')),
+      `조사가 괄호로 남았다: ${w.text}`);
+  }
+}
+
+// ── 역할 조합 충돌 검사 ───────────────────────────────────────────────────
+/*
+ * 지시나 상대를 보지 않고 11자리만으로 판정한다. 이 검사를 만들자마자
+ * 이 도구가 스스로 추천하던 기본 전술이 다섯 항목에 걸렸다 — 폭 없음,
+ * 침투 없음, 양쪽 측면이 모두 안쪽, 최전방은 내려오는데 들어갈 사람 없음.
+ * 그래서 같은 조건을 buildXI의 균형 벌점에도 넣었고, 아래에서 둘 다 확인한다.
+ */
+{
+  const ROLE = (id) => RD.ROLES.find((r) => r.id === id);
+  const slot = (pos, roleId, duty, name) => ({
+    slot: { pos, x: 0, y: 0, id: pos },
+    role: ROLE(roleId), duty,
+    player: { name: name || pos, attrs: {} },
+    familiarity: 1
+  });
+  // 4-2-3-1: 양쪽 측면 앞뒤가 전부 안으로 들어오고, 달리는 사람이 없는 조합
+  const broken = {
+    formation: { id: 'x', ko: '검사용' },
+    lineup: [
+      slot('GK', 'gk', 'd'),
+      slot('DR', 'ifb', 'd'), slot('DC', 'cd', 'd'), slot('DC', 'cd', 'd'), slot('DL', 'ifb', 'd'),
+      slot('DM', 'dlp', 's'), slot('MC', 'ap', 's'),
+      slot('AMR', 'iw', 's'), slot('AMC', 'eng', 's'), slot('AML', 'iw', 's'),
+      slot('ST', 'f9', 's')
+    ]
+  };
+  const found = E.chemistry(broken);
+  const kinds = new Set(found.map((f) => f.kind));
+  for (const want of ['no-width', 'no-runner', 'both-inverted-l', 'both-inverted-r', 'empty-front']) {
+    assert.ok(kinds.has(want), `'${want}'를 못 잡았다: ${[...kinds].join(', ')}`);
+  }
+  for (const f of found) {
+    assert.ok(f.text && f.text.length > 10, `${f.kind}에 설명이 없다`);
+    assert.ok(f.fix && f.fix.length > 10, `${f.kind}에 무엇을 하면 되는지가 없다`);
+    assert.ok(['high', 'mid'].includes(f.level), `${f.kind}의 level이 이상하다`);
+    // 조사가 어긋나면 조언이 기계가 쓴 것처럼 읽힌다
+    assert.ok(!/윙백가|맨라|포워드이라|이\(가\)/.test(f.text + f.fix), `조사가 어긋났다: ${f.text}`);
+  }
+  assert.equal(new Set(found.map((f) => f.kind)).size, found.length, '같은 검사가 두 번 나왔다');
+
+  // 멀쩡한 조합에서는 아무것도 나오면 안 된다 (경고가 늘 떠 있으면 아무도 안 읽는다)
+  const sound = {
+    formation: { id: 'y', ko: '검사용' },
+    lineup: [
+      slot('GK', 'gk', 'd'),
+      slot('DR', 'fb', 's'), slot('DC', 'cd', 'd'), slot('DC', 'bpd', 'd'), slot('DL', 'wb', 's'),
+      slot('DM', 'dm', 'd'), slot('MC', 'b2b', 's'),
+      slot('AMR', 'w', 's'), slot('AMC', 'am', 's'), slot('AML', 'if', 'a'),
+      slot('ST', 'tf', 'a')
+    ]
+  };
+  assert.equal(E.chemistry(sound).length, 0,
+    '문제없는 조합에서 경고가 나왔다: ' + E.chemistry(sound).map((f) => f.text).join(' / '));
+
+  /*
+   * 그리고 엔진이 실제로 내놓는 전술이 이 검사를 통과해야 한다 — 도구가 자기
+   * 추천을 스스로 반려하면 어느 쪽 말을 믿어야 할지 알 수 없다.
+   *
+   * 포메이션 20개를 하나씩 고정해서 전부 돌린다. 한 형태에서만 확인하면
+   * 그 형태가 우연히 멀쩡한 것인지 균형 벌점이 일하는 것인지 구분되지 않는다.
+   */
+  {
+    /*
+     * 세 번째 변형은 일부러 만든 함정이다. 패스·기술만 높고 크로스·체력·발이
+     * 없으면 모든 측면 자리에서 인버티드 계열이 적합도로 이긴다 — 균형 벌점이
+     * 없으면 열세 개 포메이션이 "폭을 잡는 사람 0명"으로 나온다.
+     */
+    const insideOnly = squad.map((p) => ({
+      ...p,
+      attrs: { ...p.attrs, pas: 17, tec: 17, fir: 17, vis: 16, cmp: 16, cro: 4, sta: 6, wor: 6, pac: 7, acc: 7 }
+    }));
+    const variants = [
+      ['기본', squad],
+      ['기술형', squad.map((p) => ({ ...p, attrs: { ...p.attrs, tec: 16, pas: 16, vis: 15, pac: 9 } }))],
+      ['속공형', squad.map((p) => ({ ...p, attrs: { ...p.attrs, pac: 17, acc: 16, tec: 8, pas: 8 } }))],
+      ['안쪽 편향', insideOnly]
+    ];
+    for (const [label, players] of variants) {
+      for (const f of FD.FORMATIONS) {
+        const r = E.generate({
+          players,
+          opponent: { formationId: '4231', traits: [] },
+          context: { venue: 'home', odds: 'even', goal: 'win' },
+          allowedFormations: [f.id]
+        });
+        const bad = E.chemistry(r.xi).filter((x) => x.level === 'high');
+        assert.equal(bad.length, 0,
+          `${label} / ${f.ko}: 엔진이 낸 조합이 스스로 걸렸다 — ${bad.map((x) => x.text).join(' / ')}`);
+      }
+    }
+    for (const standing of ['top', 'mid', 'bottom']) {
+      const base = E.baseTactic({ players: squad, standing });
+      const bad = E.chemistry(base.xi).filter((x) => x.level === 'high');
+      assert.equal(bad.length, 0,
+        `기본 전술(${standing})이 스스로 낸 조합에서 걸렸다: ${bad.map((x) => x.text).join(' / ')}`);
+    }
+  }
+}
+
+// ── 세트피스 ──────────────────────────────────────────────────────────────
+{
+  // 데이터 정합성 — 알 수 없는 능력치를 쓰면 그 자리는 영영 비어 있는다
+  const ATTR_IDS2 = new Set(Object.keys(RD.ATTRS));
+  for (const spec of [...SD.ATT_CORNER, ...SD.DEF_CORNER, ...SD.SPECIALISTS]) {
+    assert.ok(spec.id && spec.ko && spec.fm, `세트피스 자리 ${spec.id}에 이름이 빠졌다`);
+    assert.ok(spec.why && spec.why.length > 10, `${spec.id}에 이유가 없다`);
+    for (const a of Object.keys(spec.weight)) {
+      assert.ok(ATTR_IDS2.has(a), `${spec.id}의 알 수 없는 능력치 ${a}`);
+    }
+    for (const a of Object.keys(spec.need || {})) {
+      assert.ok(ATTR_IDS2.has(a), `${spec.id}의 알 수 없는 최소 기준 ${a}`);
+      assert.ok(Object.keys(spec.weight).includes(a),
+        `${spec.id}의 최소 기준 ${a}가 가중치에 없다 — 걸러 놓고 점수에는 안 쓴다`);
+    }
+  }
+
+  const base = E.baseTactic({ players: squad, standing: 'mid' });
+  const sp = E.setPieces(base.xi);
+  assert.ok(sp, '세트피스를 내놓지 않았다');
+
+  // 골키퍼가 코너를 차러 올라가면 안 된다
+  const everyone = [...sp.attack, ...sp.defence, ...sp.specialists].flatMap((s) => s.picks);
+  const gk = base.xi.lineup.find((l) => l.slot.pos === 'GK');
+  assert.ok(!everyone.some((p) => gk && p.name === gk.player.name),
+    '골키퍼를 세트피스 자리에 세웠다');
+
+  // 한 사람이 코너에서 두 자리를 겸할 수 없다 — 키커가 박스 안에 있을 수 없다
+  for (const group of [sp.attack, sp.defence]) {
+    const names = group.flatMap((s) => s.picks).map((p) => p.name);
+    assert.equal(new Set(names).size, names.length,
+      `같은 선수가 코너에서 두 자리를 맡았다: ${names.join(', ')}`);
+  }
+  // 전문 키커는 겸해도 되므로 위 규칙을 적용하지 않는다
+  assert.ok(sp.specialists.some((s) => s.picks.length), '전문 키커를 하나도 못 뽑았다');
+
+  // 최소 기준을 밑도는 선수를 세우면 안 된다
+  for (const s of [...sp.attack, ...sp.defence, ...sp.specialists]) {
+    if (!s.need) continue;
+    for (const p of s.picks) {
+      const pl = squad.find((x) => x.name === p.name);
+      for (const [id, min] of Object.entries(s.need)) {
+        const v = pl && pl.attrs[id];
+        if (typeof v === 'number' && v > 0) {
+          assert.ok(v >= min, `${s.ko}에 ${p.name}(${id} ${v})를 세웠다 — 최소 ${min}`);
+        }
+      }
+    }
+  }
+
+  /*
+   * 능력치를 모르면 지어내지 않는다. 0으로 보면 "능력치가 낮은 선수"와
+   * 구분되지 않아 아무나 키커가 된다.
+   */
+  const blank = E.setPieces({
+    formation: { id: 'z', ko: '검사용' },
+    lineup: base.xi.lineup.map((l) => ({ ...l, player: { name: l.player.name, attrs: {} } }))
+  });
+  assert.equal(blank.attack.flatMap((s) => s.picks).length, 0,
+    '능력치가 하나도 없는데 세트피스 자리를 채웠다');
+  assert.equal(blank.verdict, null, '능력치가 없는데 세트피스 진단을 내놨다');
+  assert.equal(blank.known, 0);
+
+  /*
+   * 오른쪽 코너를 왼발잡이가 차면 인스윙이다. 노려야 할 자리가 달라지므로
+   * 발을 알면 여기까지 말해 줘야 한다.
+   */
+  const kicker = { ...squad[0], name: '왼발 키커', foot: 'L', attrs: { ...squad[0].attrs, cor: 18, tec: 15, vis: 15 } };
+  const lefty = E.setPieces({
+    formation: { id: 'z', ko: '검사용' },
+    lineup: base.xi.lineup.map((l, i) => (i === 1 ? { ...l, player: kicker } : l))
+  });
+  assert.equal(lefty.attack[0].picks[0].name, '왼발 키커', '코너킥 18인 선수를 키커로 안 뽑았다');
+  const right = lefty.swing.find((s) => s.side === 'r');
+  const left = lefty.swing.find((s) => s.side === 'l');
+  assert.equal(right.kind, 'in', '왼발잡이의 오른쪽 코너를 인스윙으로 안 봤다');
+  assert.equal(left.kind, 'out', '왼발잡이의 왼쪽 코너를 아웃스윙으로 안 봤다');
+  assert.ok(/니어/.test(right.fix), '인스윙인데 니어 포스트를 안 짚었다');
+  assert.ok(/파 포스트/.test(left.fix), '아웃스윙인데 파 포스트를 안 짚었다');
+
+  // 발을 모르면 스윙 이야기를 하지 않는다
+  const noFoot = E.setPieces({
+    formation: { id: 'z', ko: '검사용' },
+    lineup: base.xi.lineup.map((l, i) => (i === 1 ? { ...l, player: { ...kicker, foot: undefined } } : l))
+  });
+  assert.equal(noFoot.swing.length, 0, '발을 모르는데 인스윙/아웃스윙을 단정했다');
+
+  // 제공권이 좋은 팀과 나쁜 팀의 진단이 갈려야 한다
+  const tall = squad.map((p) => ({ ...p, attrs: { ...p.attrs, hea: 17, jum: 17 } }));
+  const small = squad.map((p) => ({ ...p, attrs: { ...p.attrs, hea: 6, jum: 6 } }));
+  const tallSp = E.setPieces(E.baseTactic({ players: tall, standing: 'mid' }).xi);
+  const smallSp = E.setPieces(E.baseTactic({ players: small, standing: 'mid' }).xi);
+  assert.equal(tallSp.verdict.level, 'good', `높은 팀 진단: ${tallSp.verdict.text}`);
+  assert.equal(smallSp.verdict.level, 'poor', `작은 팀 진단: ${smallSp.verdict.text}`);
+  assert.ok(/켜/.test(tallSp.verdict.fix), '세트피스가 강한데 켜라는 말이 없다');
+  assert.ok(smallSp.weakDefence, '전원이 공중볼에 약한데 수비 경고가 없다');
+  assert.equal(tallSp.weakDefence, null, '제공권이 좋은데 수비 경고가 나왔다');
 }
 
 // ── 축 값이 라벨 범위를 벗어나지 않는다 ───────────────────────────────────
