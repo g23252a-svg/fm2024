@@ -1039,16 +1039,6 @@
     function tagCount(tag) {
       return slots.filter(function (s) { return (s.choice.role.tags || []).indexOf(tag) >= 0; }).length;
     }
-    function replace(pred, filter) {
-      for (var i = 0; i < slots.length; i++) {
-        var s = slots[i];
-        if (!pred(s)) continue;
-        var alt = s.cands.filter(filter)[0];
-        if (alt) { s.choice = alt; return true; }
-      }
-      return false;
-    }
-
     // 수비를 하지 않는 역할은 최대 하나.
     var guard = 0;
     while (tagCount('no-defence') > 1 && guard++ < 6) {
@@ -2293,7 +2283,6 @@
     }
 
     // 수비 세트피스는 별개입니다 — 공격은 골라 넣을 수 있지만 수비는 못 피합니다.
-    var defBox = aerials.slice().sort(function (a, b) { return a - b; });
     var weakDef = null;
     if (known >= 8) {
       var lowCount = aerials.filter(function (v) { return v < 10; }).length;
@@ -2305,7 +2294,6 @@
         };
       }
     }
-    void defBox;
 
     return {
       attack: attack, defence: defence, specialists: specialists,

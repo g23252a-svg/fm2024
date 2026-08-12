@@ -14,3 +14,13 @@ jobs:
         with:
           node-version: '20'
       - run: npm test
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # 무작위 스쿼드로 엔진을 흔들어 본다. 느려서 smoke와 따로 돈다.
+      - run: npm run fuzz

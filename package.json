@@ -4,7 +4,8 @@
   "private": true,
   "description": "Football Manager 2024 custom tactics generator — squad-aware roles, duties, team and player instructions, and opponent counter-plans",
   "scripts": {
-    "test": "node tests/smoke.mjs"
+    "test": "node tests/smoke.mjs",
+    "fuzz": "node tests/fuzz.mjs"
   },
   "engines": {
     "node": ">=18"
