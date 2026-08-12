@@ -202,11 +202,26 @@
         if (typeof v === 'number' && v > 0) known++;
       });
     });
+    var defenders = outfield.filter(function (p) {
+      return (p.positions || []).some(function (x) { return ['DC', 'DR', 'DL', 'WBR', 'WBL', 'DM'].indexOf(x) >= 0; });
+    });
+    var mids = outfield.filter(function (p) {
+      return (p.positions || []).some(function (x) { return ['DM', 'MC', 'AMC'].indexOf(x) >= 0; });
+    });
+    var wideMen = outfield.filter(function (p) {
+      return (p.positions || []).some(function (x) { return ['AMR', 'AML', 'MR', 'ML', 'WBR', 'WBL', 'DR', 'DL'].indexOf(x) >= 0; });
+    });
+
     return {
       pace: round1(pick(['pac', 'acc'], attackers.length ? attackers : outfield)),
       technique: round1(pick(['tec', 'fir', 'pas'], outfield)),
       aerial: round1(pick(['jum', 'hea', 'str'], outfield)),
       stamina: round1(pick(['sta', 'wor'], outfield)),
+      // 아래 넷은 시즌 기본 전술을 고를 때만 씁니다 — 경기별 전술은 상대가 정합니다.
+      crossing: round1(pick(['cro'], wideMen.length ? wideMen : outfield)),
+      defending: round1(pick(['mar', 'tck', 'pos'], defenders.length ? defenders : outfield)),
+      creativity: round1(pick(['vis', 'pas', 'fla'], mids.length ? mids : outfield)),
+      finishing: round1(pick(['fin', 'otb'], attackers.length ? attackers : outfield)),
       gkKick: round1(pick(['kic'], keepers)),
       count: players.length,
       coverage: total ? known / total : 0
@@ -747,7 +762,10 @@
 
     // 3) 선수 배정 + 4) 역할 재검토
     var assigned = assignPlayers(slots, players, fitOf);
-    for (var pass = 0; pass < 3; pass++) {
+    // fast 모드는 재검토를 건너뜁니다. 기본 전술을 고를 때는 (플랜 7종 × 포메이션
+    // 20종) 140가지를 훑어야 해서, 후보 추리기에는 초기 선택만으로 충분합니다.
+    // 최종적으로 고른 하나에는 다시 전체 계산을 돌립니다.
+    for (var pass = 0; pass < (opts.fast ? 0 : 3); pass++) {
       var improved = false;
       for (var i = 0; i < slots.length; i++) {
         var s = slots[i];
@@ -1276,6 +1294,190 @@
     return results;
   }
 
+  /*
+   * ── 시즌 기본 전술 ──────────────────────────────────────────────────────
+   *
+   * 상대를 보지 않고 스쿼드만으로 고르는 전술입니다. 매 경기 새로 짜는 대신
+   * 여기서 나온 것을 기본으로 두고, 상대에 따라 「맞춤 전술」에서 조정하는 식으로
+   * 쓰는 것을 전제로 합니다.
+   *
+   * 경기별 전술과 다르게 봐야 하는 것이 둘 있습니다.
+   *   - 지속 가능성: 한 경기만 버티면 되는 게 아니라 시즌 내내 씁니다. 스쿼드
+   *     스태미너가 받쳐 주지 않는 압박은 여기서 고르면 안 됩니다.
+   *   - 두께: 주전 11명만 맞는 형태보다, 교체 자원까지 같은 자리를 채울 수 있는
+   *     형태가 시즌 전술로 낫습니다.
+   *
+   * "최강 전술" 같은 건 없습니다. 여기서 내는 건 우리 스쿼드가 가장 잘 수행할 수
+   * 있는 형태이지 승률이 가장 높은 형태가 아닙니다.
+   */
+  var PLAN_SQUAD_FIT = {
+    'press-high': function (s) { return (s.stamina - 13) * 2.2 + (s.pace - 12) * 0.6; },
+    possession: function (s) { return (s.technique - 12) * 2.4 + (s.creativity - 12) * 1.2; },
+    'wide-cross': function (s) { return (s.crossing - 12) * 1.6 + (s.aerial - 12) * 1.6; },
+    counter: function (s) { return (s.pace - 13) * 2 + (s.defending - 12) * 1; },
+    'in-behind': function (s) { return (s.pace - 13) * 2.2 + (s.finishing - 12) * 1.2; },
+    'low-block': function (s) { return (s.defending - 12) * 2 - (s.technique - 12) * 0.8; },
+    'overload-centre': function (s) { return (s.creativity - 12) * 1.8 + (s.technique - 12) * 1; }
+  };
+
+  /*
+   * 리그 내 위치에 따른 기본 전술 성향.
+   *
+   * 스쿼드 능력치만으로는 "내려앉기"가 쉽게 1등이 됩니다 — 수비 능력치가 평범만
+   * 해도 점수가 붙고, 역할 적합도는 어떤 방향에서도 비슷하게 나오기 때문입니다.
+   * 그런데 시즌 내내 쓸 기본 전술로 블록을 세우면 약팀을 만났을 때 이길 방법이
+   * 없습니다. 반대로 약팀이 전방 압박을 기본으로 삼으면 매 경기 무너집니다.
+   *
+   * 이건 능력치에서 나오지 않는 정보이므로 사용자에게 직접 받습니다.
+   */
+  var STANDING_PLAN_PRIOR = {
+    strong: { 'low-block': -7, counter: -2, possession: 1.5, 'press-high': 1, 'wide-cross': 0.5, 'overload-centre': 0.5, 'in-behind': 0 },
+    mid: { 'low-block': -3, counter: 0.5, possession: 0.5, 'press-high': 0, 'wide-cross': 0.5, 'overload-centre': 0, 'in-behind': 0.5 },
+    weak: { 'low-block': 2, counter: 2.5, possession: -1.5, 'press-high': -1.5, 'wide-cross': 0, 'overload-centre': -0.5, 'in-behind': 1 }
+  };
+  // 시즌 기본으로 삼기 어려운 형태. 4-2-4처럼 한쪽으로 몰린 배치는 특정 상황용입니다.
+  var BASE_FORMATION_PRIOR = { attacking: -3 };
+
+  function basePrior(planId, formation, standing) {
+    var p = (STANDING_PLAN_PRIOR[standing] || STANDING_PLAN_PRIOR.mid)[planId] || 0;
+    (formation.tags || []).forEach(function (t) { p += BASE_FORMATION_PRIOR[t] || 0; });
+    return p;
+  }
+
+  function squadPlanBonus(planId, squad) {
+    var f = PLAN_SQUAD_FIT[planId];
+    if (!f) return 0;
+    // 능력치를 모르면 이 항목은 침묵합니다 — 0을 낮은 값으로 읽으면 안 됩니다.
+    if (!squad.technique && !squad.pace && !squad.defending) return 0;
+    return clamp(f(squad), -7, 7);
+  }
+
+  // 주전 11명을 빼고 남은 선수로 같은 자리를 채워 봅니다.
+  function benchFor(players, xi) {
+    var used = {};
+    xi.lineup.forEach(function (l) { if (l.player) used[l.player._id] = 1; });
+    var rest = players.filter(function (p) { return !used[p._id]; });
+    if (!rest.length) return [];
+    var cache = {};
+    function fitOf(player, role, duty, slotPos) {
+      var k = player._id + '|' + role.id + '|' + duty + '|' + slotPos;
+      if (cache[k] === undefined) {
+        var proxy = Object.create(role);
+        proxy._slotPos = slotPos;
+        cache[k] = roleFit(player, proxy, duty);
+      }
+      return cache[k];
+    }
+    var slots = xi.lineup.map(function (l) {
+      return { slot: l.slot, choice: { role: l.role, duty: l.duty } };
+    });
+    var assigned = assignPlayers(slots, rest, fitOf);
+    return xi.lineup.map(function (l, i) {
+      var p = assigned[i];
+      return {
+        slot: l.slot, role: l.role, duty: l.duty, player: p || null,
+        fit: p ? Math.round(fitOf(p, l.role, l.duty, l.slot.pos).score) : null
+      };
+    });
+  }
+
+  function baseTactic(input) {
+    var players = (input.players || []).map(function (p, i) {
+      var c = Object.assign({}, p);
+      c._id = p.id || ('p' + i);
+      c.positions = p.positions || [];
+      c.attrs = p.attrs || {};
+      return c;
+    });
+    if (players.length < 7) return null;
+
+    var squad = summariseSquad(players);
+    var ctx = normaliseContext(input.context);
+    var opp = normaliseOpponent({});      // 상대 없음 — 중립
+    var standing = STANDING_PLAN_PRIOR[input.standing] ? input.standing : 'mid';
+    var fitCache = {};
+    var planIds = Object.keys(TD.PLANS);
+    var pool = FD.FORMATIONS.filter(function (f) {
+      return !input.allowedFormations || !input.allowedFormations.length
+        || input.allowedFormations.indexOf(f.id) >= 0;
+    });
+
+    // 1) 플랜 × 포메이션을 빠르게 훑어 후보를 추립니다.
+    var cands = [];
+    planIds.forEach(function (planId) {
+      var planW = planRoleWeights([{ id: planId }]);
+      var bonus = squadPlanBonus(planId, squad);
+      pool.forEach(function (f) {
+        var xi = buildXI(players, f, planW, {}, { fitCache: fitCache, fast: true });
+        var prior = basePrior(planId, f, standing);
+        cands.push({
+          planId: planId, formation: f, xi: xi,
+          squadBonus: round1(bonus), prior: round1(prior),
+          score: xi.teamFit + xi.planFit * 2 + bonus + prior
+        });
+      });
+    });
+    cands.sort(function (a, b) { return b.score - a.score; });
+
+    // 2) 상위 후보만 제대로 다시 계산합니다(역할 재검토 + 교체 두께).
+    var top = cands.slice(0, 8).map(function (c) {
+      var planW = planRoleWeights([{ id: c.planId }]);
+      var xi = buildXI(players, c.formation, planW, {}, { fitCache: fitCache });
+      var bench = benchFor(players, xi);
+      // 채워진 자리만으로 평균을 냅니다. 빈 자리를 0으로 세면 스쿼드가 얇을 때
+      // 모든 포메이션이 똑같이 낮아져 아무것도 구분하지 못합니다.
+      var filled = bench.filter(function (b) { return b.player; });
+      var depth = filled.length ? avg(filled.map(function (b) { return b.fit; })) : 0;
+      var covered = filled.length;
+      return {
+        planId: c.planId, formation: c.formation, xi: xi, bench: bench,
+        squadBonus: c.squadBonus, prior: c.prior,
+        depth: Math.round(depth), depthCovered: covered,
+        score: round1(xi.teamFit + xi.planFit * 2 + c.squadBonus + c.prior
+          + clamp((depth - 45) * 0.12, -4, 4) * (covered / 11))
+      };
+    }).sort(function (a, b) { return b.score - a.score; });
+
+    var best = top[0];
+
+    // 3) 고른 플랜으로 지시를 냅니다. 상대는 중립이므로 여기서 나오는 지시는
+    //    스쿼드와 우리 형태에서만 나온 것입니다.
+    var ourSum = summariseFormation(best.formation);
+    var xiPlayers = best.xi.lineup.map(function (l) { return l.player; }).filter(Boolean);
+    var xiSquad = xiPlayers.length >= 7 ? summariseSquad(xiPlayers) : squad;
+    var fired = evaluateRules(opp, ctx, xiSquad, ourSum, null);
+    var acc = accumulate(fired);
+    // 상대가 없으므로 플랜은 우리가 고른 것으로 고정합니다.
+    var planTop = [{ id: best.planId, ko: TD.PLANS[best.planId].ko, desc: TD.PLANS[best.planId].desc, score: best.score }];
+    var instructions = finaliseInstructions(acc, planTop);
+    var warnings = balanceWarnings(best.xi, instructions.axes, instructions.toggles, xiSquad, opp);
+    var pis = individualInstructions(best.xi, opp, planTop, instructions.axes);
+
+    return {
+      squad: squad,
+      xiSquad: xiSquad,
+      standing: standing,
+      plan: planTop[0],
+      formation: best.formation,
+      xi: best.xi,
+      bench: best.bench,
+      depth: best.depth,
+      depthCovered: best.depthCovered,
+      instructions: instructions,
+      warnings: warnings,
+      individual: pis,
+      reasons: fired.map(function (f) { return { why: f.why, action: f.action, group: f.rule.group }; }),
+      ranking: top.map(function (c) {
+        return {
+          planId: c.planId, planKo: TD.PLANS[c.planId].ko,
+          formationId: c.formation.id, formationKo: c.formation.ko,
+          score: c.score, teamFit: c.xi.teamFit, planFit: c.xi.planFit,
+          squadBonus: c.squadBonus, prior: c.prior, depth: c.depth, depthCovered: c.depthCovered
+        };
+      })
+    };
+  }
+
   // ── 최상위 진입점 ─────────────────────────────────────────────────────
   function generate(input) {
     var players = (input.players || []).map(function (p, i) {
@@ -1335,6 +1537,8 @@
 
   root.FM_ENGINE = {
     generate: generate,
+    baseTactic: baseTactic,
+    benchFor: benchFor,
     inferOpponentTraits: inferOpponentTraits,
     roleFit: roleFit,
     summariseSquad: summariseSquad,

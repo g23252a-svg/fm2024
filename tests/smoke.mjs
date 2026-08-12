@@ -655,6 +655,81 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(strip(a), strip(b), '같은 입력에서 다른 결과가 나왔다');
 }
 
+// ── 시즌 기본 전술 (상대 없이 스쿼드만으로) ───────────────────────────────
+{
+  const base = E.baseTactic({ players: squad, standing: 'mid' });
+  assert.ok(base, 'baseTactic이 아무것도 내놓지 않았다');
+  assert.equal(base.xi.lineup.length, 11);
+  const names = base.xi.lineup.map((l) => l.player && l.player.name).filter(Boolean);
+  assert.equal(new Set(names).size, names.length, '기본 전술에서 선수가 중복 배정됐다');
+  assert.ok(base.plan && TD.PLANS[base.plan.id], '전술 방향이 없다');
+  assert.equal(base.formation.slots.length, 11);
+  assert.ok(base.ranking.length >= 3, '후보가 부족하다');
+  for (const c of base.ranking) {
+    assert.ok(TD.PLANS[c.planId], `후보에 알 수 없는 방향 ${c.planId}`);
+    assert.ok(E.FORMATION_BY_ID[c.formationId], `후보에 알 수 없는 포메이션 ${c.formationId}`);
+  }
+  for (let i = 1; i < base.ranking.length; i++) {
+    assert.ok(base.ranking[i - 1].score >= base.ranking[i].score, '후보가 점수순이 아니다');
+  }
+
+  // 교체 명단은 주전과 겹치면 안 된다
+  const starters = new Set(base.xi.lineup.map((l) => l.player && l.player._id).filter(Boolean));
+  const benched = base.bench.map((b) => b.player && b.player._id).filter(Boolean);
+  for (const id of benched) assert.ok(!starters.has(id), '교체 명단에 주전이 들어 있다');
+  assert.equal(new Set(benched).size, benched.length, '한 선수가 두 자리의 교체로 잡혔다');
+
+  // 결정성
+  const again = E.baseTactic({ players: squad, standing: 'mid' });
+  assert.equal(base.formation.id, again.formation.id, '같은 입력에서 다른 포메이션이 나왔다');
+  assert.equal(base.plan.id, again.plan.id, '같은 입력에서 다른 방향이 나왔다');
+
+  // 선수가 너무 적으면 만들지 않는다
+  assert.equal(E.baseTactic({ players: squad.slice(0, 5) }), null);
+
+  /*
+   * 리그 내 위치가 실제로 반영되어야 한다.
+   * 능력치만 보면 '내려앉기'가 쉽게 1등이 된다 — 수비 능력치가 평범만 해도 점수가
+   * 붙고 역할 적합도는 어느 방향에서나 비슷하기 때문이다. 그런데 시즌 내내 쓸
+   * 기본 전술로 블록을 세우면 약팀을 만났을 때 이길 방법이 없다.
+   */
+  const strong = E.baseTactic({ players: squad, standing: 'strong' });
+  assert.notEqual(strong.plan.id, 'low-block', '상위권 팀의 기본 전술이 내려앉기로 나왔다');
+  assert.ok(!strong.ranking.slice(0, 3).some((c) => c.planId === 'low-block'),
+    '상위권인데 내려앉기가 상위 후보에 있다');
+
+  // 빠른데 약한 팀은 역습 쪽으로 기울어야 한다
+  const fastSquad = squad.map((p) => ({
+    ...p, attrs: { ...p.attrs, pac: 16, acc: 16, tec: 8, pas: 8, vis: 8, fir: 8 }
+  }));
+  const weakFast = E.baseTactic({ players: fastSquad, standing: 'weak' });
+  assert.ok(['counter', 'in-behind', 'low-block'].includes(weakFast.plan.id),
+    `빠른 하위권 팀인데 ${weakFast.plan.ko}가 나왔다`);
+
+  const strongTech = E.baseTactic({
+    players: squad.map((p) => ({ ...p, attrs: { ...p.attrs, tec: 16, pas: 16, vis: 15, fir: 16 } })),
+    standing: 'strong'
+  });
+  assert.ok(['possession', 'overload-centre', 'press-high', 'wide-cross'].includes(strongTech.plan.id),
+    `기술 좋은 상위권 팀인데 ${strongTech.plan.ko}가 나왔다`);
+
+  // 능력치를 하나도 모르면 스쿼드 보정은 침묵해야 한다 (0을 낮은 값으로 읽으면 안 된다)
+  const blankSquad = squad.map((p) => ({ id: p.id, name: p.name, positions: p.positions, attrs: {} }));
+  const blankBase = E.baseTactic({ players: blankSquad, standing: 'mid' });
+  assert.ok(blankBase, '능력치가 없을 때 기본 전술을 못 만든다');
+  for (const c of blankBase.ranking) assert.equal(c.squadBonus, 0, '모르는 능력치로 스쿼드 보정을 냈다');
+
+  // 모든 전술 방향에 위치 보정값이 있어야 한다
+  const engineSrc = read('engine.js');
+  for (const st of ['strong', 'mid', 'weak']) {
+    const block = engineSrc.slice(engineSrc.indexOf(st + ':', engineSrc.indexOf('STANDING_PLAN_PRIOR')));
+    for (const pid of PLAN_IDS) {
+      assert.ok(block.slice(0, 400).includes(`'${pid}'`) || block.slice(0, 400).includes(pid + ':'),
+        `위치 '${st}'에 전술 방향 ${pid}의 보정이 없다`);
+    }
+  }
+}
+
 // ── 엔진: 대응이 실제로 반영되는가 ────────────────────────────────────────
 {
   // 상대 수비 라인이 높으면 공간으로 패스를 켜고 뒷공간 침투를 고른다

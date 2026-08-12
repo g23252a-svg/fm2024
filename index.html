@@ -354,6 +354,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
 <main id="main">
   <section id="tab-squad"></section>
+  <section id="tab-base" hidden></section>
   <section id="tab-opp" hidden></section>
   <section id="tab-result" hidden></section>
   <section id="tab-match" hidden></section>
@@ -384,6 +385,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     },
     context: { venue: 'home', odds: 'even', goal: 'win' },
     pinnedFormation: null,
+    standing: 'mid',
     tab: 'squad',
     editing: null,
     overlay: false,
@@ -396,7 +398,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     try {
       localStorage.setItem(STORE, JSON.stringify({
         players: S.players, opponent: S.opponent, context: S.context,
-        pinnedFormation: S.pinnedFormation, opponentSquad: S.opponentSquad
+        pinnedFormation: S.pinnedFormation, opponentSquad: S.opponentSquad, standing: S.standing
       }));
     } catch (e) { /* 저장 공간이 없어도 이번 세션은 그대로 씁니다 */ }
   }
@@ -410,6 +412,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       if (d.context) Object.assign(S.context, d.context);
       if (d.pinnedFormation) S.pinnedFormation = d.pinnedFormation;
       if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
+      if (d.standing) S.standing = d.standing;
     } catch (e) { /* 깨진 저장본은 무시하고 초기 상태로 */ }
   }
 
@@ -445,8 +448,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   // ── 탭 ──────────────────────────────────────────────────────────────────
   var TABS = [
     { id: 'squad', ko: '스쿼드' },
+    { id: 'base', ko: '기본 전술' },
     { id: 'opp', ko: '상대' },
-    { id: 'result', ko: '전술' },
+    { id: 'result', ko: '맞춤 전술' },
     { id: 'match', ko: '경기 중' },
     { id: 'guide', ko: '안내' }
   ];
@@ -1300,37 +1304,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ])
     ]));
 
-    // FM 화면에 옮기는 순서 — 세이브를 막 시작해 전술이 비어 있을 때 무엇부터
-    // 누르면 되는지가 첫 관문입니다.
-    var topPlan = res.plans.top[0];
-    var preset = TD.FM_PRESETS[topPlan.id];
-    var shifted = Object.keys(res.instructions.axes).filter(function (k) { return res.instructions.axes[k].shifted; }).length;
-    var onCount = Object.keys(res.instructions.toggles).filter(function (k) { return res.instructions.toggles[k].on; }).length;
-    root.appendChild(h('div', { class: 'card' }, [
-      h('h2', { text: 'FM에 옮기는 순서' }),
-      h('div', { class: 'desc', text: '전술 → 기본 정보 화면에서 이 순서대로 하면 됩니다.' }),
-      (function () {
-        var ol = h('ol', { style: 'margin:0;padding-left:19px;font-size:13px;line-height:1.85;color:var(--dim)' });
-        ol.appendChild(h('li', {}, [
-          '전술 유형을 고릅니다 — ',
-          h('b', { style: 'color:var(--acc)', text: preset ? preset.ko : TD.FM_PRESET_BLANK }),
-          preset && preset.alt ? h('span', { class: 'tiny muted', text: ' (또는 ' + preset.alt + ')' }) : null,
-          h('span', { class: 'tiny muted', text: '  · 프리셋은 역할과 지시를 자기 값으로 채우니 아래와 다른 부분은 덮어쓰세요. 어긋나는 게 싫으면 「' + TD.FM_PRESET_BLANK + '」으로 백지에서 시작하면 됩니다.' })
-        ]));
-        ol.appendChild(h('li', {}, ['포메이션을 ', h('b', { style: 'color:var(--text)', text: res.xi.formation.ko }),
-          ro(res.xi.formation.ko) + ' 바꿉니다.']));
-        ol.appendChild(h('li', {}, ['멘탈리티를 ', h('b', { style: 'color:var(--text)', text: res.instructions.axes.mentality.label }),
-          ro(res.instructions.axes.mentality.label) + ' 둡니다.']));
-        ol.appendChild(h('li', {}, ['자리마다 역할과 임무를 지정합니다 (아래 ',
-          h('b', { style: 'color:var(--text)', text: '포지션별 역할과 임무' }), ' 11줄).']));
-        ol.appendChild(h('li', {}, ['팀 지시를 맞춥니다 — 바꿀 것은 ',
-          h('b', { style: 'color:var(--text)', text: '축 ' + Math.max(0, shifted - 1) + '개 · 켤 지시 ' + onCount + '개' }), '뿐입니다.']));
-        if (res.individual.length) {
-          ol.appendChild(h('li', {}, ['개인 지시를 넣습니다 (', h('b', { style: 'color:var(--text)', text: res.individual.length + '명' }), ').']));
-        }
-        return ol;
-      })()
-    ]));
+    root.appendChild(fmStepsCard(res.plans.top[0], res.xi.formation, res.instructions, res.individual.length));
 
     // 포지션이 비어 있으면 아래 결과 전체를 믿을 수 없으므로 맨 위에서 말합니다.
     var noPos = res.xi.lineup.filter(function (l) {
@@ -1350,19 +1324,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     }
 
     // 경고
-    if (res.warnings.length) {
-      var wc = h('div', { class: 'card' }, [
-        h('h2', { text: '점검할 점' }),
-        h('div', { class: 'desc', text: '이 조합에서 실제로 문제가 되는 부분입니다.' })
-      ]);
-      res.warnings.forEach(function (w) {
-        wc.appendChild(h('div', { class: 'warn' + (w.level === 'high' ? ' high' : '') }, [
-          h('span', { class: 'ic', text: w.level === 'high' ? '!' : '·' }),
-          h('span', { text: w.text })
-        ]));
-      });
-      root.appendChild(wc);
-    }
+    if (res.warnings.length) root.appendChild(warningsCard(res.warnings));
 
     // 상대 대응
     var bc = h('div', { class: 'card' }, [
@@ -1413,53 +1375,10 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     root.appendChild(lc);
 
     // 팀 지시
-    var ic = h('div', { class: 'card' }, [
-      h('h2', { text: '팀 지시' }),
-      h('div', { class: 'desc', text: '색이 들어온 항목만 기본값에서 바꾸면 됩니다. 각 줄을 누르면 왜 그렇게 정해졌는지 나옵니다.' })
-    ]);
-    ['core', 'ip', 'tr', 'ood'].forEach(function (g) {
-      var items = [];
-      Object.keys(res.instructions.axes).forEach(function (k) {
-        var a = res.instructions.axes[k];
-        if (a.group === g) items.push(axisRow(a));
-      });
-      Object.keys(res.instructions.toggles).forEach(function (k) {
-        var t = res.instructions.toggles[k];
-        if (t.group === g && (t.on || t.reasons.length)) items.push(toggleRow(t));
-      });
-      if (!items.length) return;
-      ic.appendChild(h('h3', { style: 'font-size:12px;color:var(--dim);margin:13px 0 6px', text: TD.GROUP_KO[g] }));
-      var box = h('div', { class: 'instr' });
-      items.forEach(function (i) { box.appendChild(i); });
-      ic.appendChild(box);
-    });
-    root.appendChild(ic);
+    root.appendChild(instructionsCard(res.instructions));
 
     // 개인 지시
-    var pc = h('div', { class: 'card' }, [
-      h('h2', { text: '개인 지시' }),
-      h('div', { class: 'desc', text: '선수 개인 능력치와 상대 특징에서 나온 항목만 적었습니다. 점선 표시는 역할이 자동으로 켜서 끌 수 없는 지시입니다.' })
-    ]);
-    if (!res.individual.length) {
-      pc.appendChild(h('div', { class: 'small muted', text: '따로 손댈 개인 지시가 없습니다 — 역할 기본값 그대로 두세요.' }));
-    }
-    res.individual.forEach(function (p) {
-      var ul = h('ul');
-      p.items.forEach(function (it) {
-        ul.appendChild(h('li', { class: it.locked ? 'lock' : '' }, [
-          h('b', { text: it.text }),
-          h('span', { class: 'r', text: it.why })
-        ]));
-      });
-      pc.appendChild(h('div', { class: 'pi' }, [
-        h('h4', {}, [
-          (p.player ? p.player.name : posLabel(p.slot)),
-          h('small', { text: p.role.ko + ' / ' + RD.DUTIES[p.duty].ko + ' · ' + posLabel(p.slot) })
-        ]),
-        ul
-      ]));
-    });
-    root.appendChild(pc);
+    root.appendChild(individualCard(res.individual));
 
     // 포메이션 후보
     var fc = h('div', { class: 'card' }, [
@@ -1671,6 +1590,283 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     return expandable('ins' + (t.on ? ' on' : ' def'), t.ko, t.on ? '켜기' : '끄기', t.reasons);
   }
 
+  // ── 기본 전술 탭 ────────────────────────────────────────────────────────
+  /*
+   * 상대를 보지 않고 스쿼드만으로 고른 시즌 기본 전술.
+   * 계산이 무거우므로(플랜 7종 × 포메이션 20종) 스쿼드가 바뀌지 않았으면
+   * 지난 결과를 그대로 씁니다.
+   */
+  function baseSignature() {
+    return (S.standing || 'mid') + '#' + S.players.map(function (p) {
+      return p.name + ':' + (p.positions || []).join('') + ':' +
+        Object.keys(p.attrs || {}).filter(function (k) { return p.attrs[k] > 0; })
+          .map(function (k) { return k + p.attrs[k]; }).join('');
+    }).join('|');
+  }
+
+  RENDER.base = function (root) {
+    if (S.players.length < 7) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'empty' }, [
+          h('b', { text: '선수가 부족합니다' }),
+          '기본 전술을 고르려면 최소 7명이 필요합니다. 「스쿼드」 탭에서 먼저 가져오세요.'
+        ]),
+        h('div', { class: 'row', style: 'justify-content:center' }, [
+          h('button', { class: 'btn pri', onclick: function () { S.tab = 'squad'; render(); } }, ['스쿼드로 이동'])
+        ])
+      ]));
+      return;
+    }
+
+    var sig = baseSignature();
+    var res;
+    if (S._baseCache && S._baseCache.sig === sig) {
+      res = S._baseCache.res;
+    } else {
+      try {
+        res = E.baseTactic({ players: S.players, context: S.context, standing: S.standing || 'mid' });
+      } catch (err) {
+        root.appendChild(h('div', { class: 'card' }, [h('div', { class: 'rep err', text: '오류: ' + (err && err.message) })]));
+        return;
+      }
+      S._baseCache = { sig: sig, res: res };
+    }
+    if (!res) return;
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '시즌 기본 전술' }),
+      h('div', { class: 'desc', text: '상대를 보지 않고 우리 스쿼드에만 맞춘 전술입니다. 이걸 기본으로 저장해 두고, 상대가 정해지면 「맞춤 전술」에서 조정하세요.' }),
+      h('div', { class: 'field' }, [
+        h('label', { class: 'f', text: '우리 팀의 리그 내 위치 — 능력치만으로는 알 수 없어 직접 받습니다' }),
+        segment([['strong', '상위권'], ['mid', '중위권'], ['weak', '하위권']], S.standing || 'mid', function (v) {
+          S.standing = v; save(); render();
+        })
+      ]),
+      h('div', { class: 'summary' }, [
+        summaryCell('포메이션', res.formation.ko, ''),
+        summaryCell('전술 방향', res.plan.ko, 'var(--acc)'),
+        summaryCell('멘탈리티', res.instructions.axes.mentality.label, 'var(--acc2)'),
+        summaryCell('교체 두께', res.depthCovered ? (res.depth + ' · ' + res.depthCovered + '자리') : '백업 없음', '')
+      ]),
+      h('div', { class: 'small muted', text: TD.PLANS[res.plan.id].desc }),
+      bigPitch(res.xi.lineup),
+      h('div', { class: 'legend' }, [
+        h('span', {}, [h('i', { style: 'background:var(--duty-d)' }), '수비 임무']),
+        h('span', {}, [h('i', { style: 'background:var(--duty-s)' }), '지원 임무']),
+        h('span', {}, [h('i', { style: 'background:var(--duty-a)' }), '공격 임무'])
+      ]),
+      h('div', { class: 'row', style: 'margin-top:12px' }, [
+        h('button', { class: 'btn', onclick: function () { copyBase(res); } }, ['전술 텍스트로 복사'])
+      ])
+    ]));
+
+    root.appendChild(fmStepsCard(res.plan, res.formation, res.instructions, res.individual.length));
+
+    var noPos = res.xi.lineup.filter(function (l) { return l.player && !(l.player.positions || []).length; }).length;
+    if (noPos >= 3) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'warn high' }, [
+          h('span', { class: 'ic', text: '!' }),
+          h('span', {}, [h('b', { text: '선발 ' + noPos + '명의 등록 포지션을 모릅니다. ' }),
+            '아래 배치는 능력치만 보고 세운 것이라 실제로 쓸 수 없습니다. FM 보기에 ',
+            h('b', { text: '포지션' }), ' 열을 넣어 다시 내보내세요.'])
+        ])
+      ]));
+    }
+    if (res.warnings.length) root.appendChild(warningsCard(res.warnings));
+
+    var lc = h('div', { class: 'card' }, [
+      h('h2', { text: '포지션별 역할과 임무' }),
+      h('div', { class: 'desc', text: '「교체」는 주전을 빼고 남은 선수 중 그 자리를 가장 잘 채우는 선수입니다 — 로테이션과 부상 대비용입니다.' })
+    ]);
+    var lu = h('div', { class: 'lineup' });
+    res.xi.lineup.forEach(function (l, i) {
+      var duty = l.duty === 'a' ? 'a' : (l.duty === 's' ? 's' : 'd');
+      var back = res.bench[i];
+      lu.appendChild(h('div', { class: 'lu ' + duty }, [
+        h('div', { class: 'pos', text: posLabel(l.slot) }),
+        h('div', { class: 'mid' }, [
+          h('div', { class: 'role' }, [l.role.ko, h('em', { text: RD.DUTIES[l.duty].ko })]),
+          h('div', { class: 'who', text: l.player ? l.player.name : '— 배치할 선수 부족' }),
+          h('div', { class: 'note', text: l.role.note }),
+          back && back.player
+            ? h('div', { class: 'note', style: 'color:var(--dim2)', text: '교체: ' + back.player.name + ' (' + back.fit + ')' })
+            : h('div', { class: 'note', style: 'color:var(--warn)', text: '이 자리에 백업이 없습니다' })
+        ]),
+        h('div', { class: 'fit' }, [l.fit == null ? '—' : String(l.fit), h('small', { text: '적합도' })])
+      ]));
+    });
+    lc.appendChild(lu);
+    root.appendChild(lc);
+
+    root.appendChild(instructionsCard(res.instructions));
+    if (res.individual.length) root.appendChild(individualCard(res.individual));
+
+    var rc = h('div', { class: 'card' }, [
+      h('h2', { text: '다른 후보' }),
+      h('div', { class: 'desc', text: '점수 = 선수 적합도 + 역할이 방향과 맞는 정도 + 스쿼드 성격 + 교체 두께. 위 몇 개가 1~2점 차이면 실제로 다 쓸 만하다는 뜻이고, 그럴 땐 익숙한 형태를 고르는 편이 낫습니다.' })
+    ]);
+    res.ranking.forEach(function (c, i) {
+      rc.appendChild(h('div', { class: 'fopt', style: i === 0 ? 'border-color:var(--acc)' : '' }, [
+        h('div', { class: 'n' }, [
+          h('b', { text: c.formationKo + ' · ' + c.planKo }),
+          h('span', { text: '적합 ' + c.teamFit + ' · 역할 ' + c.planFit + ' · 스쿼드 ' +
+            (c.squadBonus > 0 ? '+' : '') + c.squadBonus + ' · 위치 ' + (c.prior > 0 ? '+' : '') + c.prior +
+            ' · 두께 ' + (c.depthCovered ? c.depth : '—') })
+        ]),
+        h('div', { class: 'sc', text: String(c.score) })
+      ]));
+    });
+    root.appendChild(rc);
+
+    var cov = Math.round(res.squad.coverage * 100);
+    root.appendChild(h('div', { class: 'card tight' }, [
+      h('div', { class: 'small muted' }, [
+        '능력치 입력률 ', h('b', { style: 'color:' + (cov >= 60 ? 'var(--acc)' : 'var(--warn)'), text: cov + '%' }),
+        ' · 선수 ' + res.squad.count + '명 · 선발 기준 속도 ' + res.xiSquad.pace + ' · 기술 ' + res.xiSquad.technique +
+        ' · 제공권 ' + res.xiSquad.aerial + ' · 체력 ' + res.xiSquad.stamina + '. ',
+        h('b', { text: '이건 "무조건 이기는 전술"이 아닙니다' }),
+        ' — 우리 스쿼드가 가장 잘 수행할 수 있는 형태라는 뜻이고, 승률로 검증한 값이 아닙니다.'
+      ])
+    ]));
+  };
+
+  // ── 결과 화면 공통 조각 ─────────────────────────────────────────────────
+  function fmStepsCard(plan, formation, instructions, piCount) {
+    var preset = TD.FM_PRESETS[plan.id];
+    var shifted = Object.keys(instructions.axes).filter(function (k) { return instructions.axes[k].shifted; }).length;
+    var onCount = Object.keys(instructions.toggles).filter(function (k) { return instructions.toggles[k].on; }).length;
+    var ol = h('ol', { style: 'margin:0;padding-left:19px;font-size:13px;line-height:1.85;color:var(--dim)' });
+    ol.appendChild(h('li', {}, [
+      '전술 유형을 고릅니다 — ',
+      h('b', { style: 'color:var(--acc)', text: preset ? preset.ko : TD.FM_PRESET_BLANK }),
+      preset && preset.alt ? h('span', { class: 'tiny muted', text: ' (또는 ' + preset.alt + ')' }) : null,
+      h('span', { class: 'tiny muted', text: '  · 프리셋은 역할과 지시를 자기 값으로 채우니 아래와 다른 부분은 덮어쓰세요. 어긋나는 게 싫으면 「' + TD.FM_PRESET_BLANK + '」으로 백지에서 시작하면 됩니다.' })
+    ]));
+    ol.appendChild(h('li', {}, ['포메이션을 ', h('b', { style: 'color:var(--text)', text: formation.ko }),
+      ro(formation.ko) + ' 바꿉니다.']));
+    ol.appendChild(h('li', {}, ['멘탈리티를 ', h('b', { style: 'color:var(--text)', text: instructions.axes.mentality.label }),
+      ro(instructions.axes.mentality.label) + ' 둡니다.']));
+    ol.appendChild(h('li', {}, ['자리마다 역할과 임무를 지정합니다 (아래 ',
+      h('b', { style: 'color:var(--text)', text: '포지션별 역할과 임무' }), ' 11줄).']));
+    ol.appendChild(h('li', {}, ['팀 지시를 맞춥니다 — 바꿀 것은 ',
+      h('b', { style: 'color:var(--text)', text: '축 ' + Math.max(0, shifted - 1) + '개 · 켤 지시 ' + onCount + '개' }), '뿐입니다.']));
+    if (piCount) ol.appendChild(h('li', {}, ['개인 지시를 넣습니다 (', h('b', { style: 'color:var(--text)', text: piCount + '명' }), ').']));
+    return h('div', { class: 'card' }, [
+      h('h2', { text: 'FM에 옮기는 순서' }),
+      h('div', { class: 'desc', text: '전술 → 기본 정보 화면에서 이 순서대로 하면 됩니다.' }),
+      ol
+    ]);
+  }
+
+  function warningsCard(warnings) {
+    var wc = h('div', { class: 'card' }, [
+      h('h2', { text: '점검할 점' }),
+      h('div', { class: 'desc', text: '이 조합에서 실제로 문제가 되는 부분입니다.' })
+    ]);
+    warnings.forEach(function (w) {
+      wc.appendChild(h('div', { class: 'warn' + (w.level === 'high' ? ' high' : '') }, [
+        h('span', { class: 'ic', text: w.level === 'high' ? '!' : '·' }),
+        h('span', { text: w.text })
+      ]));
+    });
+    return wc;
+  }
+
+  function instructionsCard(instructions) {
+    var ic = h('div', { class: 'card' }, [
+      h('h2', { text: '팀 지시' }),
+      h('div', { class: 'desc', text: '색이 들어온 항목만 기본값에서 바꾸면 됩니다. 각 줄을 누르면 왜 그렇게 정해졌는지 나옵니다.' })
+    ]);
+    ['core', 'ip', 'tr', 'ood'].forEach(function (g) {
+      var items = [];
+      Object.keys(instructions.axes).forEach(function (k) {
+        var a = instructions.axes[k];
+        if (a.group === g) items.push(axisRow(a));
+      });
+      Object.keys(instructions.toggles).forEach(function (k) {
+        var t = instructions.toggles[k];
+        if (t.group === g && (t.on || t.reasons.length)) items.push(toggleRow(t));
+      });
+      if (!items.length) return;
+      ic.appendChild(h('h3', { style: 'font-size:12px;color:var(--dim);margin:13px 0 6px', text: TD.GROUP_KO[g] }));
+      var box = h('div', { class: 'instr' });
+      items.forEach(function (i) { box.appendChild(i); });
+      ic.appendChild(box);
+    });
+    return ic;
+  }
+
+  function individualCard(individual) {
+    var pc = h('div', { class: 'card' }, [
+      h('h2', { text: '개인 지시' }),
+      h('div', { class: 'desc', text: '선수 개인 능력치와 상대 특징에서 나온 항목만 적었습니다. 점선 표시는 역할이 자동으로 켜서 끌 수 없는 지시입니다.' })
+    ]);
+    if (!individual.length) {
+      pc.appendChild(h('div', { class: 'small muted', text: '따로 손댈 개인 지시가 없습니다 — 역할 기본값 그대로 두세요.' }));
+    }
+    individual.forEach(function (p) {
+      var ul = h('ul');
+      p.items.forEach(function (it) {
+        ul.appendChild(h('li', { class: it.locked ? 'lock' : '' }, [
+          h('b', { text: it.text }),
+          h('span', { class: 'r', text: it.why })
+        ]));
+      });
+      pc.appendChild(h('div', { class: 'pi' }, [
+        h('h4', {}, [
+          (p.player ? p.player.name : posLabel(p.slot)),
+          h('small', { text: p.role.ko + ' / ' + RD.DUTIES[p.duty].ko + ' · ' + posLabel(p.slot) })
+        ]),
+        ul
+      ]));
+    });
+    return pc;
+  }
+
+  // 기본 전술 텍스트로 복사 — 맞춤 전술과 형식을 맞춥니다.
+  function copyBase(res) {
+    var L = [];
+    L.push('■ FM24 시즌 기본 전술 — ' + res.formation.ko + ' / ' + res.plan.ko);
+    L.push('FM 전술 유형: ' + ((TD.FM_PRESETS[res.plan.id] || {}).ko || TD.FM_PRESET_BLANK));
+    L.push('');
+    L.push('[선발과 역할]');
+    res.xi.lineup.forEach(function (l, i) {
+      var back = res.bench[i];
+      L.push('  ' + posLabel(l.slot).padEnd(6) + ' ' + l.role.ko + ' / ' + RD.DUTIES[l.duty].ko +
+        '  —  ' + (l.player ? l.player.name : '(미배정)') + (l.fit != null ? ' (' + l.fit + ')' : '') +
+        (back && back.player ? '   교체: ' + back.player.name + ' (' + back.fit + ')' : ''));
+    });
+    L.push('');
+    L.push('[팀 지시]');
+    ['core', 'ip', 'tr', 'ood'].forEach(function (g) {
+      var rows = [];
+      Object.keys(res.instructions.axes).forEach(function (k) {
+        var a = res.instructions.axes[k];
+        if (a.group === g && a.shifted) rows.push('  ' + a.ko + ': ' + a.label);
+      });
+      Object.keys(res.instructions.toggles).forEach(function (k) {
+        var t = res.instructions.toggles[k];
+        if (t.group === g && t.on) rows.push('  ' + t.ko + ': 켜기');
+      });
+      if (rows.length) { L.push(' <' + TD.GROUP_KO[g] + '>'); rows.forEach(function (r) { L.push(r); }); }
+    });
+    if (res.individual.length) {
+      L.push('');
+      L.push('[개인 지시]');
+      res.individual.forEach(function (p) {
+        L.push('  ' + (p.player ? p.player.name : posLabel(p.slot)) + ' (' + p.role.ko + '/' + RD.DUTIES[p.duty].ko + ')');
+        p.items.forEach(function (it) { L.push('    - ' + it.text + (it.locked ? ' (역할 고정)' : '')); });
+      });
+    }
+    if (res.warnings.length) {
+      L.push('');
+      L.push('[점검할 점]');
+      res.warnings.forEach(function (w) { L.push('  ! ' + w.text); });
+    }
+    writeClipboard(L.join('\n'));
+  }
+
   // ── 경기 중 탭 ──────────────────────────────────────────────────────────
   RENDER.match = function (root) {
     root.appendChild(h('div', { class: 'card' }, [
@@ -1836,7 +2032,10 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       L.push('[점검할 점]');
       res.warnings.forEach(function (w) { L.push('  ! ' + w.text); });
     }
-    var text = L.join('\n');
+    writeClipboard(L.join('\n'));
+  }
+
+  function writeClipboard(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () { toast('전술을 복사했습니다.'); },
         function () { fallbackCopy(text); });
