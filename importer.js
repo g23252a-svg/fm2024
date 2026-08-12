@@ -35,64 +35,84 @@
 
   // 메타 열
   reg('name', 'Name', '이름', '선수', '선수명', 'Player');
-  reg('position', 'Position', 'Pos', '포지션', '위치');
-  reg('age', 'Age', '나이');
-  reg('foot', 'Preferred Foot', '주발', '선호발', 'Foot');
+  // '위치'는 포지션이 아니라 능력치 '위치 선정'입니다(FM 한국어판 열 이름).
+  reg('position', 'Position', 'Pos', '포지션', '등록 포지션');
+  reg('age', 'Age', '나이', '연령');
+  reg('foot', 'Preferred Foot', '주발', '선호발', 'Foot', '주로 쓰는 발');
   reg('club', 'Club', '클럽', '소속팀');
 
-  // 영문 약어 + 한국어 정식 명칭 + 영문 정식 명칭
+  // 알고는 있지만 쓰지 않는 열. 이걸 등록해 두지 않으면 "무시한 열" 목록에
+  // 매번 올라와 사용자가 매핑해야 할 열인지 아닌지 헷갈립니다.
+  reg('skip', 'Status', '상태', 'Inf', 'Info', '정보',
+    // 전술에서 배정된 자리이지 선수의 등록 포지션이 아닙니다. 값이 '-'이거나
+    // 역할 약어라서 포지션으로 읽으면 등록 포지션을 지워 버립니다.
+    'Selected Position', '선택한 포지션', '선발 포지션',
+    // 'Nat'은 국적이기도 하고 타고난 체력이기도 합니다. 능력치 쪽을 택합니다
+    // (아래 ALIASES가 덮어씁니다) — 틀리면 화면에서 다시 지정할 수 있습니다.
+    'Nationality', '국적', 'Apps', '출장', 'Gls', '득점',
+    'Transfer Value', '이적료', 'Wage', '주급', 'Contract', '계약');
+
+  /*
+   * 능력치 열 이름.
+   *
+   * ★로 표시한 한국어 이름은 실제 FM24 한국어판 내보내기 파일에서 확인한 것입니다.
+   * 처음에는 사전적 번역(가속도 · 민첩성 · 마무리 · 스태미너 …)을 넣어 두었는데,
+   * FM 한국어판이 화면에 쓰는 이름은 그게 아니라 훨씬 짧은 말이었습니다
+   * (순간 속도 · 민첩 · 결정 · 지구 …). 실제 파일에서 47개 중 하나만 맞았습니다.
+   * 사전을 보고 채운 이름은 그래서 전부 뒤로 물리고 확인된 것을 앞에 둡니다.
+   */
   var ALIASES = {
     // GK
-    aer: ['Aer', 'Aerial Reach', '공중 장악'],
-    cmd: ['Cmd', 'Command of Area', '지역 장악'],
-    com: ['Com', 'Communication', '의사소통'],
-    ecc: ['Ecc', 'Eccentricity', '괴짜 기질'],
-    han: ['Han', 'Handling', '핸들링'],
-    kic: ['Kic', 'Kicking', '킥'],
-    ono: ['1v1', 'One on Ones', '일대일', '1대1'],
-    ref: ['Ref', 'Reflexes', '반사 신경'],
-    tro: ['TRO', 'Rushing Out', 'Tendency to Rush Out', '뛰쳐나가기'],
-    pun: ['Pun', 'Punching', 'Tendency to Punch', '펀칭 성향'],
-    thr: ['Thr', 'Throwing', '던지기'],
+    aer: ['Aer', 'Aerial Reach', '공중 장악', '공중 도달'],                      // ★ Aer (영문 그대로 나옴)
+    cmd: ['장악', 'Cmd', 'Command of Area', '지역 장악', '수비 지휘'],            // ★ 장악
+    com: ['조율', 'Com', 'Communication', '의사소통', '소통'],                    // ★ 조율
+    ecc: ['기행', 'Ecc', 'Eccentricity', '괴짜 기질', '돌발성'],                  // ★ 기행
+    han: ['핸들', 'Han', 'Handling', '핸들링'],                                   // ★ 핸들
+    kic: ['골킥', 'Kic', 'Kicking', '킥'],                                        // ★ 골킥
+    ono: ['1대1', '1v1', 'One on Ones', '일대일'],                                // ★ 1대1
+    ref: ['반사', 'Ref', 'Reflexes', '반사 신경'],                                // ★ 반사
+    tro: ['돌진하는 경향', 'TRO', 'Rushing Out', 'Tendency to Rush Out', '뛰쳐나가기'], // ★ 돌진하는 경향
+    pun: ['펀칭 빈도', 'Pun', 'Punching', 'Tendency to Punch', '펀칭 성향'],       // ★ 펀칭 빈도
+    thr: ['Thr', 'Throwing', '던지기', '스로잉'],                                 // ★ 스로인 (아래 주석 참고)
     // 기술
-    cor: ['Cor', 'Corners', '코너킥'],
-    cro: ['Cro', 'Crossing', '크로스'],
-    dri: ['Dri', 'Dribbling', '드리블'],
-    fin: ['Fin', 'Finishing', '마무리'],
-    fir: ['Fir', 'First Touch', '퍼스트 터치'],
-    fre: ['Fre', 'Free Kick Taking', 'Free Kicks', '프리킥'],
-    hea: ['Hea', 'Heading', '헤딩'],
-    lon: ['Lon', 'Long Shots', '중거리 슛'],
-    lth: ['L Th', 'LTh', 'Long Throws', '롱 스로인'],
-    mar: ['Mar', 'Marking', '마크'],
-    pas: ['Pas', 'Passing', '패스'],
-    pen: ['Pen', 'Penalty Taking', '페널티킥'],
-    tck: ['Tck', 'Tackling', '태클'],
-    tec: ['Tec', 'Technique', '테크닉'],
+    cor: ['코너', 'Cor', 'Corners', '코너킥'],                                    // ★ 코너
+    cro: ['크로스', 'Cro', 'Crossing'],                                           // ★ 크로스
+    dri: ['돌파', 'Dri', 'Dribbling', '드리블'],                                  // ★ 돌파
+    fin: ['결정', 'Fin', 'Finishing', '결정력', '마무리'],                        // ★ 결정
+    fir: ['트랩', 'Fir', 'First Touch', '퍼스트 터치', '볼 컨트롤'],              // ★ 트랩
+    fre: ['프리', 'Fre', 'Free Kick Taking', 'Free Kicks', '프리킥'],             // ★ 프리
+    hea: ['헤더', 'Hea', 'Heading', '헤딩'],                                      // ★ 헤더
+    lon: ['롱슛', 'Lon', 'Long Shots', '중거리 슛', '장거리 슛'],                 // ★ 롱슛
+    lth: ['스로인', 'L Th', 'LTh', 'Long Throws', '롱 스로인'],                   // ★ 스로인
+    mar: ['마크', 'Mar', 'Marking', '마킹'],                                      // ★ 마크
+    pas: ['패스', 'Pas', 'Passing'],                                              // ★ 패스
+    pen: ['PK', 'Pen', 'Penalty Taking', '페널티킥'],                             // ★ PK
+    tck: ['태클', 'Tck', 'Tackling'],                                             // ★ 태클
+    tec: ['기술', 'Tec', 'Technique', '테크닉'],                                  // ★ 기술
     // 정신
-    agg: ['Agg', 'Aggression', '적극성'],
-    ant: ['Ant', 'Anticipation', '예측력'],
-    bra: ['Bra', 'Bravery', '용맹성'],
-    cmp: ['Cmp', 'Composure', '침착성'],
-    cnt: ['Cnt', 'Con', 'Concentration', '집중력'],
-    dec: ['Dec', 'Decisions', '판단력'],
-    det: ['Det', 'Determination', '결단력'],
-    fla: ['Fla', 'Flair', '개인기'],
-    ldr: ['Ldr', 'Leadership', '리더십'],
-    otb: ['OtB', 'Off the Ball', '오프더볼', '오프 더 볼'],
-    pos: ['Pos', 'Positioning', '위치 선정'],
-    tea: ['Tea', 'Teamwork', '팀워크'],
-    vis: ['Vis', 'Vision', '시야'],
-    wor: ['Wor', 'Work Rate', '활동량'],
+    agg: ['적극', 'Agg', 'Aggression', '적극성'],                                 // ★ 적극
+    ant: ['예측', 'Ant', 'Anticipation', '예측력'],                               // ★ 예측
+    bra: ['대담', 'Bra', 'Bravery', '대담성', '용감성'],                          // ★ 대담
+    cmp: ['침착', 'Cmp', 'Composure', '침착성'],                                  // ★ 침착
+    cnt: ['집중', 'Cnt', 'Con', 'Concentration', '집중력'],                       // ★ 집중
+    dec: ['판단', 'Dec', 'Decisions', '판단력'],                                  // ★ 판단
+    det: ['승부', 'Det', 'Determination', '결단력', '승부욕'],                    // ★ 승부
+    fla: ['천재', 'Fla', 'Flair', '창조성', '개인기'],                            // ★ 천재
+    ldr: ['리더십', 'Ldr', 'Leadership', '지도력'],                               // ★ 리더십
+    otb: ['오프 더 볼', 'OtB', 'Off the Ball', '오프더볼', '움직임'],             // ★ 오프 더 볼
+    pos: ['위치', 'Positioning', '위치 선정'],                                    // ★ 위치
+    tea: ['팀워크', 'Tea', 'Teamwork', '협동심'],                                 // ★ 팀워크
+    vis: ['시야', 'Vis', 'Vision'],                                               // ★ 시야
+    wor: ['활동', 'Wor', 'Work Rate', '활동량'],                                  // ★ 활동
     // 신체
-    acc: ['Acc', 'Acceleration', '가속도'],
-    agi: ['Agi', 'Agility', '민첩성'],
-    bal: ['Bal', 'Balance', '균형 감각'],
-    jum: ['Jum', 'Jumping Reach', '점프 도달력'],
-    nat: ['Nat', 'Natural Fitness', '자연 체력'],
-    pac: ['Pac', 'Pace', '속도'],
-    sta: ['Sta', 'Stamina', '스태미너'],
-    str: ['Str', 'Strength', '몸싸움']
+    acc: ['순간 속도', 'Acc', 'Acceleration', '가속도'],                          // ★ 순간 속도
+    agi: ['민첩', 'Agi', 'Agility', '민첩성'],                                    // ★ 민첩
+    bal: ['균형', 'Bal', 'Balance', '균형 감각'],                                 // ★ 균형
+    jum: ['점프', 'Jum', 'Jumping Reach', '점프 도달력'],                         // ★ 점프
+    nat: ['타고난 체력', 'Nat', 'Natural Fitness', '자연 체력'],                  // ★ 타고난 체력
+    pac: ['주력', 'Pac', 'Pace', '속도'],                                         // ★ 주력
+    sta: ['지구', 'Sta', 'Stamina', '지구력', '스태미너'],                        // ★ 지구
+    str: ['몸싸움', 'Str', 'Strength', '체격']                                    // ★ 몸싸움
   };
   Object.keys(ALIASES).forEach(function (id) {
     reg.apply(null, ['attr:' + id].concat(ALIASES[id]));
@@ -220,13 +240,89 @@
     return rows;
   }
 
-  function parseDelimited(text) {
-    var lines = String(text).split(/\r?\n/).filter(function (l) { return l.trim(); });
-    if (!lines.length) return [];
-    var delim = lines[0].indexOf('\t') >= 0 ? '\t' : (lines[0].indexOf(';') >= 0 ? ';' : ',');
-    return lines.map(function (l) {
-      return l.split(delim).map(function (c) { return c.trim().replace(/^"|"$/g, ''); });
+  /*
+   * 구분자 표 파서.
+   *
+   * 단순히 split(',')로 자르면 `"Smith, John",ST (C),15` 같은 줄에서 이름이
+   * 두 칸으로 쪼개지고, 그 뒤 열이 통째로 한 칸씩 밀립니다. 외부 도구가 내놓는
+   * CSV에서는 이름에 쉼표가 흔하므로 따옴표를 제대로 처리합니다.
+   * (따옴표 안의 줄바꿈까지 한 칸으로 봅니다.)
+   */
+  function parseDelimitedWith(text, delim) {
+    var rows = [], row = [], field = '', inQuotes = false;
+    var t = String(text).replace(/\r\n?/g, '\n');
+    for (var i = 0; i < t.length; i++) {
+      var c = t[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (t[i + 1] === '"') { field += '"'; i++; }   // "" → 따옴표 한 글자
+          else inQuotes = false;
+        } else field += c;
+      } else if (c === '"') {
+        inQuotes = true;
+      } else if (c === delim) {
+        row.push(field.trim()); field = '';
+      } else if (c === '\n') {
+        row.push(field.trim()); rows.push(row); row = []; field = '';
+      } else {
+        field += c;
+      }
+    }
+    if (field.length || row.length) { row.push(field.trim()); rows.push(row); }
+    return rows.filter(function (r) {
+      return r.some(function (c) { return c !== ''; });
     });
+  }
+
+  // 구분자를 세어서 고르면 이름 안의 쉼표에 속습니다. 실제로 잘라 보고
+  // 열이 가장 많이 나오면서 행마다 열 수가 일정한 구분자를 씁니다.
+  function parseDelimited(text) {
+    var best = null, bestScore = -1;
+    ['\t', ';', ',', '|'].forEach(function (d) {
+      var rows = parseDelimitedWith(text, d);
+      if (rows.length < 1) return;
+      var cols = rows[0].length;
+      if (cols < 2) return;
+      var consistent = rows.filter(function (r) { return r.length === cols; }).length / rows.length;
+      var score = cols * consistent;
+      if (score > bestScore) { bestScore = score; best = rows; }
+    });
+    return best || [];
+  }
+
+  /*
+   * 파일 바이트를 글자로 바꿉니다.
+   *
+   * 모든 걸 UTF-8로 읽으면 UTF-16으로 내보내는 도구(윈도우 프로그램에 흔합니다)의
+   * 파일이 글자 사이에 널이 낀 쓰레기가 됩니다. 그러면 열 이름이 하나도 안 맞아
+   * "열 이름을 인식하지 못했습니다"만 뜨고 원인을 알 수 없습니다.
+   */
+  function decodeBytes(buffer) {
+    var b = new Uint8Array(buffer);
+    var enc = 'utf-8';
+    if (b[0] === 0xFF && b[1] === 0xFE) enc = 'utf-16le';
+    else if (b[0] === 0xFE && b[1] === 0xFF) enc = 'utf-16be';
+    else if (!(b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF)) {
+      // BOM이 없는 UTF-16LE — 아스키 본문이면 홀수 번째 바이트가 대부분 0입니다.
+      var look = Math.min(b.length, 1024), zeros = 0, odd = 0;
+      for (var i = 1; i < look; i += 2) { odd++; if (b[i] === 0) zeros++; }
+      if (odd >= 8 && zeros / odd > 0.6) enc = 'utf-16le';
+    }
+    if (typeof TextDecoder === 'undefined') {
+      // 아주 오래된 브라우저. 최소한 아스키 표는 읽히게 해 둡니다.
+      var out = '';
+      var step = enc.indexOf('utf-16') === 0 ? 2 : 1;
+      for (var k = (enc === 'utf-16le' && b[0] === 0xFF) || (enc === 'utf-16be' && b[0] === 0xFE) ? 2 : 0;
+           k < b.length; k += step) {
+        out += String.fromCharCode(enc === 'utf-16be' ? b[k + 1] : b[k]);
+      }
+      return out;
+    }
+    try {
+      return new TextDecoder(enc).decode(b);
+    } catch (e) {
+      return new TextDecoder('utf-8').decode(b);
+    }
   }
 
   function detectAndParse(text) {
@@ -242,13 +338,36 @@
    * 첫 행이 헤더라고 가정하지 않고, 알려진 열 이름이 가장 많이 맞는 행을 헤더로
    * 삼습니다. FM 내보내기는 표 위에 제목 행이 한두 줄 붙어 나오는 경우가 있습니다.
    */
-  function resolveHeaders(rows) {
+  /*
+   * 열 이름 하나를 필드로 바꿉니다.
+   *
+   * 정확히 맞는 게 없으면, 등록된 이름 중 **이 열 이름으로 시작하는 것이 딱 하나**일
+   * 때만 그걸로 봅니다. FM은 화면 열 폭에 맞춰 이름을 줄여 내보내는 경우가 있어
+   * 「지구」가 「지구력」으로, 「민첩」이 「민첩성」으로 잘려 나옵니다.
+   * 반대 방향(등록 이름이 열 이름의 앞부분)은 허용하지 않습니다 —
+   * 그러면 「패스 성공률」이 「패스」로 잡힙니다.
+   */
+  function lookupHeader(h, userMap) {
+    var n = norm(h);
+    if (!n) return null;
+    if (userMap && userMap[n]) return userMap[n];
+    if (HEADER_MAP[n]) return HEADER_MAP[n];
+    if (n.length < 2) return null;
+    var hits = {};
+    Object.keys(HEADER_MAP).forEach(function (k) {
+      if (k.length > n.length && k.indexOf(n) === 0) hits[HEADER_MAP[k]] = 1;
+    });
+    var fields = Object.keys(hits);
+    return fields.length === 1 ? fields[0] : null;
+  }
+
+  function resolveHeaders(rows, userMap) {
     var bestIdx = -1, bestHit = 0, bestMap = null;
     var limit = Math.min(rows.length, 8);
     for (var i = 0; i < limit; i++) {
       var map = {}, hit = 0;
       rows[i].forEach(function (h, j) {
-        var f = HEADER_MAP[norm(h)];
+        var f = lookupHeader(h, userMap);
         if (f) { map[j] = f; hit++; }
       });
       if (hit > bestHit) { bestHit = hit; bestIdx = i; bestMap = map; }
@@ -276,21 +395,66 @@
       }
     }
 
+    /*
+     * '스로인'은 기술 표에서는 롱 스로인(lth), 골키퍼 표에서는 던지기(thr)입니다.
+     * 같은 이름이 두 능력치를 가리키므로 표에 무엇이 같이 있는지로 가릅니다 —
+     * 골키퍼 전용 열이 함께 있으면 골키퍼 표입니다.
+     */
+    var hasGkColumns = Object.keys(bestMap).some(function (j) {
+      return ['attr:cmd', 'attr:han', 'attr:ref', 'attr:kic', 'attr:ecc', 'attr:tro', 'attr:pun']
+        .indexOf(bestMap[j]) >= 0;
+    });
+    if (hasGkColumns) {
+      Object.keys(bestMap).forEach(function (j) {
+        if (bestMap[j] === 'attr:lth' && norm(rows[bestIdx][j]) === norm('스로인')) bestMap[j] = 'attr:thr';
+      });
+    }
+
     var unknown = [];
     rows[bestIdx].forEach(function (h, j) {
-      if (!bestMap[j] && h) unknown.push(h);
+      if (!bestMap[j] && h) {
+        var samples = [];
+        for (var k = bestIdx + 1; k < rows.length && samples.length < 4; k++) {
+          var v = rows[k][j];
+          if (v && v !== '-') samples.push(v);
+        }
+        unknown.push({
+          header: h, index: j, samples: samples,
+          // 값이 전부 1~20 정수면 능력치 열이 거의 확실합니다.
+          numeric: samples.length > 0 && samples.every(function (v) { return /^\d{1,2}$/.test(v) && +v >= 1 && +v <= 20; })
+        });
+      }
     });
     return { index: bestIdx, map: bestMap, unknown: unknown, hits: bestHit };
   }
 
+  /*
+   * 이름 칸 정리.
+   *
+   * FM 전술 화면을 내보내면 이름에 화면 조작용 문구가 붙어 나옵니다
+   * ("Ben Wilson - 선수 선발"). 그대로 두면 같은 선수가 스쿼드 화면 내보내기와
+   * 다른 이름이 되어 합쳐지지 않습니다. 하이픈이 붙은 성(Thomas-Asante)은
+   * 양옆에 공백이 없으므로 잘리지 않습니다.
+   */
+  function cleanName(raw) {
+    var s = String(raw == null ? '' : raw).trim();
+    s = s.replace(/\s+-\s+(선수\s*선발|선수선발|Select\s+Player|Choose\s+Player)\s*$/i, '');
+    return s.trim();
+  }
+
+  // 아직 선수가 배정되지 않은 자리는 '-' 또는 '- - -'로 나옵니다.
+  function isPlaceholderName(s) {
+    return !s || /^[-\s–—]*$/.test(s);
+  }
+
   // ── 최종 변환 ─────────────────────────────────────────────────────────
-  function parseSquad(text) {
+  function parseSquad(text, userMap) {
     var det = detectAndParse(text);
     var rows = det.rows;
     if (!rows.length) {
       return { players: [], report: { format: det.format, error: '표를 찾지 못했습니다.', rows: 0 } };
     }
-    var head = resolveHeaders(rows);
+    var head = resolveHeaders(rows, userMap);
     if (!head) {
       return {
         players: [],
@@ -312,7 +476,8 @@
       Object.keys(head.map).forEach(function (jStr) {
         var j = +jStr, field = head.map[j], raw = row[j];
         if (raw === undefined) return;
-        if (field === 'name') p.name = String(raw).trim();
+        if (field === 'skip') return;
+        if (field === 'name') p.name = cleanName(raw);
         else if (field === 'position') p.positions = parsePositions(raw);
         else if (field === 'age') { var age = parseInt(raw, 10); if (isFinite(age)) p.age = age; }
         else if (field === 'foot') p.foot = parseFoot(raw);
@@ -322,7 +487,7 @@
           if (v !== null) { p.attrs[field.slice(5)] = v; filled++; }
         }
       });
-      if (!p.name) continue;
+      if (isPlaceholderName(p.name)) continue;
       // 헤더가 반복해서 나오는 내보내기(페이지마다 헤더)를 걸러냅니다.
       if (HEADER_MAP[norm(p.name)]) continue;
       p.id = 'imp' + i + '_' + p.name.replace(/\s+/g, '');
@@ -343,6 +508,78 @@
         noAttrs: players.filter(function (p) { return !p.attrCount; }).length
       }
     };
+  }
+
+  /*
+   * ── 전술 화면 내보내기에서 포메이션 읽기 ────────────────────────────────
+   *
+   * FM 전술 화면을 내보내면 첫 열에 자리 이름이 위에서부터 순서대로 나옵니다
+   * (골키퍼 · 수비수 (오른쪽) · … · 스트라이커 (중앙)). 아직 선수를 배정하지
+   * 않은 시즌 전이라도 이 목록은 채워져 있어서, 상대 포메이션을 그대로 알 수 있습니다.
+   */
+  var SLOT_NAMES = [
+    [/골\s*키퍼|goalkeeper/i, 'GK'],
+    [/윙\s*백.*오른|wing\s*back.*right/i, 'WBR'],
+    [/윙\s*백.*왼|wing\s*back.*left/i, 'WBL'],
+    [/수비수.*오른|defender.*right/i, 'DR'],
+    [/수비수.*왼|defender.*left/i, 'DL'],
+    [/수비수.*중앙|defender.*(centre|center)/i, 'DC'],
+    [/수비형\s*미드필더|defensive\s*midfielder/i, 'DM'],
+    [/공격형\s*미드필더.*오른|attacking\s*midfielder.*right/i, 'AMR'],
+    [/공격형\s*미드필더.*왼|attacking\s*midfielder.*left/i, 'AML'],
+    [/공격형\s*미드필더.*중앙|attacking\s*midfielder.*(centre|center)/i, 'AMC'],
+    [/미드필더.*오른|midfielder.*right/i, 'MR'],
+    [/미드필더.*왼|midfielder.*left/i, 'ML'],
+    [/미드필더.*중앙|midfielder.*(centre|center)/i, 'MC'],
+    [/스트라이커|striker|공격수/i, 'ST']
+  ];
+
+  function slotFromName(text) {
+    var s = String(text == null ? '' : text).trim();
+    if (!s) return null;
+    for (var i = 0; i < SLOT_NAMES.length; i++) {
+      if (SLOT_NAMES[i][0].test(s)) return SLOT_NAMES[i][1];
+    }
+    return null;
+  }
+
+  function parseLineup(text) {
+    var det = detectAndParse(text);
+    var positions = [];
+    det.rows.forEach(function (row) {
+      if (!row.length) return;
+      var slot = slotFromName(row[0]);
+      // 열 순서가 다른 내보내기를 대비해 앞쪽 두 칸까지 봅니다.
+      if (!slot && row.length > 1) slot = slotFromName(row[1]);
+      if (slot) positions.push(slot);
+    });
+    // 11명을 넘어가면 교체 명단까지 읽은 것이므로 앞의 11개만 씁니다.
+    if (positions.length > 11) positions = positions.slice(0, 11);
+    return { positions: positions, format: det.format, matches: matchFormation(positions) };
+  }
+
+  // 자리 구성이 같은 포메이션을 모두 찾습니다. 3-5-2와 5-3-2처럼 배치가 같고
+  // 임무만 다른 형태가 있으므로 하나로 단정하지 않습니다.
+  function matchFormation(positions) {
+    if (!positions || positions.length !== 11) return [];
+    var FD = root.FM_FORMATION_DATA;
+    if (!FD) return [];
+    var want = tally(positions);
+    return FD.FORMATIONS.filter(function (f) {
+      return sameTally(want, tally(f.slots.map(function (s) { return s.pos; })));
+    }).map(function (f) { return f.id; });
+  }
+  function tally(list) {
+    var t = {};
+    list.forEach(function (p) { t[p] = (t[p] || 0) + 1; });
+    return t;
+  }
+  function sameTally(a, b) {
+    var keys = Object.keys(a).concat(Object.keys(b));
+    for (var i = 0; i < keys.length; i++) {
+      if ((a[keys[i]] || 0) !== (b[keys[i]] || 0)) return false;
+    }
+    return true;
   }
 
   /*
@@ -393,6 +630,10 @@
   root.FM_IMPORTER = {
     parseSquad: parseSquad,
     mergeSquad: mergeSquad,
+    parseLineup: parseLineup,
+    matchFormation: matchFormation,
+    slotFromName: slotFromName,
+    cleanName: cleanName,
     parsePositions: parsePositions,
     parseAttrValue: parseAttrValue,
     parseFoot: parseFoot,
@@ -400,6 +641,8 @@
     parsePipeTable: parsePipeTable,
     parseHtmlTable: parseHtmlTable,
     parseDelimited: parseDelimited,
+    parseDelimitedWith: parseDelimitedWith,
+    decodeBytes: decodeBytes,
     detectAndParse: detectAndParse,
     resolveHeaders: resolveHeaders,
     HEADER_MAP: HEADER_MAP

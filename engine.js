@@ -237,6 +237,104 @@
     };
   }
 
+  /*
+   * ── 상대 스쿼드에서 성향 추정 ──────────────────────────────────────────
+   *
+   * 상대 전술을 슬라이더로 일일이 채우는 건 번거롭고, 시즌 전이면 알 수도 없습니다.
+   * 상대 스쿼드를 가져오면 "어떤 무기를 가진 팀인가"는 능력치에서 바로 읽힙니다.
+   * 여기서 내는 건 상대가 실제로 그렇게 하겠다는 보장이 아니라 그럴 수 있다는
+   * 뜻이므로, 각 항목마다 근거가 된 선수 이름을 함께 돌려줍니다.
+   */
+  function inferOpponentTraits(players) {
+    var out = [];
+    var ps = (players || []).map(function (p, i) {
+      var c = Object.assign({}, p);
+      c._id = p.id || ('opp' + i);
+      c.positions = p.positions || [];
+      c.attrs = p.attrs || {};
+      return c;
+    });
+    if (!ps.length) return out;
+
+    function at(p, id) {
+      var v = (p.attrs || {})[id];
+      return typeof v === 'number' && v > 0 ? v : null;
+    }
+    function inPos() {
+      var want = Array.prototype.slice.call(arguments);
+      return ps.filter(function (p) {
+        return p.positions.some(function (x) { return want.indexOf(x) >= 0; });
+      });
+    }
+    function add(id, why, who) {
+      out.push({ id: id, why: why, players: who.slice(0, 3).map(function (p) { return p.name; }) });
+    }
+    // 능력치가 없으면 아무것도 말할 수 없습니다.
+    var known = ps.filter(function (p) { return Object.keys(p.attrs).length >= 3; });
+    if (known.length < 3) return out;
+
+    var fwd = inPos('ST', 'AMR', 'AML');
+    var fast = fwd.filter(function (p) { return (at(p, 'pac') || 0) >= 15 && (at(p, 'acc') || 0) >= 15; });
+    if (fast.length) add('fast-striker', '앞선에 속도 15 이상인 선수가 ' + fast.length + '명 있습니다.', fast);
+
+    var target = inPos('ST').filter(function (p) {
+      return (at(p, 'hea') || 0) >= 14 && (at(p, 'jum') || 0) >= 14 && (at(p, 'str') || 0) >= 13;
+    });
+    if (target.length) add('target-man', '최전방에 제공권으로 공을 지켜 줄 선수가 있습니다.', target);
+
+    var amc = inPos('AMC').filter(function (p) {
+      return (at(p, 'pas') || 0) >= 14 && (at(p, 'vis') || 0) >= 14;
+    });
+    if (amc.length) add('playmaker-amc', '2선에 패스·시야 14 이상인 선수가 있습니다.', amc);
+
+    var deep = inPos('DM', 'MC').filter(function (p) {
+      return (at(p, 'pas') || 0) >= 15 && (at(p, 'vis') || 0) >= 14;
+    });
+    if (deep.length) add('playmaker-deep', '중원 아래에 배급을 맡을 선수가 있습니다.', deep);
+
+    var cbs = inPos('DC').filter(function (p) { return at(p, 'pac') !== null; });
+    if (cbs.length >= 2) {
+      var slow = cbs.filter(function (p) { return at(p, 'pac') <= 11; });
+      if (slow.length >= Math.ceil(cbs.length / 2)) {
+        add('slow-cb', '센터백 대부분이 속도 11 이하입니다.', slow);
+      }
+    }
+    var cbsJ = inPos('DC').filter(function (p) { return at(p, 'jum') !== null; });
+    if (cbsJ.length >= 2) {
+      var small = cbsJ.filter(function (p) { return at(p, 'jum') <= 11; });
+      if (small.length >= Math.ceil(cbsJ.length / 2)) {
+        add('small-cb', '센터백 대부분이 점프 11 이하입니다.', small);
+      }
+    }
+
+    var gks = inPos('GK').filter(function (p) { return at(p, 'kic') !== null; });
+    if (gks.length) {
+      var best = gks.reduce(function (a, b) { return at(a, 'kic') >= at(b, 'kic') ? a : b; });
+      if (at(best, 'kic') <= 10) add('weak-gk-dist', '골키퍼의 킥이 ' + at(best, 'kic') + '입니다.', [best]);
+    }
+
+    var wide = inPos('AMR', 'AML', 'MR', 'ML', 'WBR', 'WBL');
+    var crossers = wide.filter(function (p) { return (at(p, 'cro') || 0) >= 14; });
+    if (crossers.length >= 3) add('cross-heavy', '측면에 크로스 14 이상인 선수가 ' + crossers.length + '명 있습니다.', crossers);
+    if (wide.length >= 5 && crossers.length >= 2) add('wing-heavy', '측면 자원이 두텁습니다(' + wide.length + '명).', wide);
+
+    var aggro = known.filter(function (p) { return (at(p, 'agg') || 0) >= 15; });
+    if (aggro.length >= 4) add('aggressive-tackling', '적극성 15 이상인 선수가 ' + aggro.length + '명입니다.', aggro);
+
+    var setPiece = known.filter(function (p) { return (at(p, 'cor') || 0) >= 14 || (at(p, 'fre') || 0) >= 14; });
+    var aerial = known.filter(function (p) { return (at(p, 'jum') || 0) >= 15 && (at(p, 'hea') || 0) >= 14; });
+    if (setPiece.length && aerial.length >= 2) {
+      add('set-piece-threat', '키커와 박스 안 제공권 자원이 함께 있습니다.', setPiece.concat(aerial));
+    }
+
+    var stam = known.filter(function (p) { return at(p, 'sta') !== null; });
+    if (stam.length >= 8) {
+      var mean = avg(stam.map(function (p) { return at(p, 'sta'); }));
+      if (mean < 12) add('low-stamina', '스쿼드 평균 지구력이 ' + round1(mean) + '입니다.', stam);
+    }
+    return out;
+  }
+
   // ── 상대 입력 정규화 ──────────────────────────────────────────────────
   function normaliseOpponent(o) {
     o = o || {};
@@ -1237,6 +1335,7 @@
 
   root.FM_ENGINE = {
     generate: generate,
+    inferOpponentTraits: inferOpponentTraits,
     roleFit: roleFit,
     summariseSquad: summariseSquad,
     summariseFormation: summariseFormation,

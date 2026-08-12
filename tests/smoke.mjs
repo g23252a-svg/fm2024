@@ -9,7 +9,8 @@ const root = path.join(here, '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
 // ── 브라우저 없이 데이터와 엔진만 적재한다 ────────────────────────────────
-const ctx = { window: {} };
+// 브라우저에 있는 전역만 넣는다 — 여기 없는 것을 쓰면 실제로도 깨진다.
+const ctx = { window: {}, TextDecoder, TextEncoder, Uint8Array, ArrayBuffer };
 vm.createContext(ctx);
 for (const file of ['data/roles.js', 'data/formations.js', 'data/tactics.js', 'engine.js', 'importer.js']) {
   vm.runInContext(read(file), ctx, { filename: file });
@@ -273,9 +274,190 @@ for (const sc of TD.SCENARIOS) assert.ok(sc.steps.length >= 3, `시나리오 ${s
   assert.deepEqual([...plain.players[0].positions], ['ST']);
   assert.equal(plain.report.attrColumns, 2);
 
-  // 인식 못한 열은 조용히 버리지 말고 보고해야 한다
-  const withJunk = IMP.parseSquad('Name\tPosition\tAcc\tTransfer Value\nY\tGK\t11\t£2M');
-  assert.ok(withJunk.report.unknownColumns.includes('Transfer Value'), '인식 못한 열을 보고하지 않았다');
+  // 인식 못한 열은 조용히 버리지 말고 보고해야 한다 (값 예시와 함께)
+  const withJunk = IMP.parseSquad('Name\tPosition\tAcc\tMagic Column\nY\tGK\t11\tzzz');
+  const junk = withJunk.report.unknownColumns.map((c) => c.header);
+  assert.ok(junk.includes('Magic Column'), `인식 못한 열을 보고하지 않았다: ${JSON.stringify(junk)}`);
+  const magic = withJunk.report.unknownColumns.find((c) => c.header === 'Magic Column');
+  assert.deepEqual([...magic.samples], ['zzz'], '인식 못한 열의 값 예시를 안 보여준다');
+  assert.equal(magic.numeric, false);
+
+  // 이미 아는 열(이적료 등)은 '인식 못한 열'로 올리지 않는다 — 매핑할 열과 섞이면
+  // 무엇을 손봐야 하는지 알 수 없다
+  const known = IMP.parseSquad('Name\tPosition\tAcc\tTransfer Value\nY\tGK\t11\t£2M');
+  assert.equal(known.report.unknownColumns.length, 0, '아는 열이 미인식으로 보고됐다');
+
+  // 값이 전부 1~20이면 능력치 열로 짐작해 표시해야 한다
+  const numericGuess = IMP.parseSquad('Name\tPosition\tAcc\t알수없는능력\nY\tGK\t11\t14');
+  const g = numericGuess.report.unknownColumns.find((c) => c.header === '알수없는능력');
+  assert.equal(g.numeric, true, '1~20 값만 있는 열을 능력치 후보로 보지 않았다');
+}
+
+// ── 외부 도구가 내놓는 CSV ────────────────────────────────────────────────
+{
+  // 이름에 쉼표가 있으면 split(',')로는 열이 통째로 한 칸씩 밀린다
+  const csv = 'Name,Position,Acc,Pac,Fin\n"Smith, John",ST (C),15,16,17\nPlain Name,D (C),11,12,5';
+  const r = IMP.parseSquad(csv);
+  assert.equal(r.players.length, 2, `따옴표 CSV 가져오기 실패: ${JSON.stringify(r.report)}`);
+  assert.equal(r.players[0].name, 'Smith, John', '따옴표 안의 쉼표에서 이름이 잘렸다');
+  assert.equal(r.players[0].attrs.acc, 15, '따옴표 때문에 열이 밀렸다');
+  assert.equal(r.players[0].attrs.fin, 17);
+  assert.deepEqual([...r.players[0].positions], ['ST']);
+  assert.equal(r.players[1].attrs.fin, 5);
+
+  // 이스케이프된 따옴표
+  const esc = IMP.parseDelimitedWith('a,"He said ""hi""",c', ',');
+  assert.deepEqual([...esc[0]], ['a', 'He said "hi"', 'c']);
+
+  // 이름에 쉼표가 있어도 탭 구분 파일은 탭으로 잘라야 한다
+  const tsv = IMP.parseSquad('Name\tPosition\tAcc\nSmith, John\tST (C)\t15');
+  assert.equal(tsv.players.length, 1);
+  assert.equal(tsv.players[0].name, 'Smith, John', '탭 파일을 쉼표로 잘랐다');
+  assert.equal(tsv.players[0].attrs.acc, 15);
+
+  // 세미콜론 구분(유럽 로캘 엑셀)
+  const semi = IMP.parseSquad('Name;Position;Acc;Pac\nA Player;ST (C);14;15');
+  assert.equal(semi.players.length, 1, '세미콜론 구분 파일을 못 읽었다');
+  assert.equal(semi.players[0].attrs.pac, 15);
+}
+
+// ── 실제 FM24 한국어판 내보내기 (tests/fixtures) ──────────────────────────
+/*
+ * 처음에 한국어 열 이름을 사전 번역으로 채웠더니(가속도·민첩성·마무리·스태미너 …)
+ * 실제 파일에서 47개 중 하나만 맞았다. FM 한국어판이 화면에 쓰는 이름은
+ * 순간 속도·민첩·결정·지구처럼 훨씬 짧은 말이다.
+ * 그래서 실제 내보내기 파일을 그대로 넣어 두고 이 검사로 고정한다.
+ */
+{
+  const fx = (n) => read(path.join('tests/fixtures', n));
+
+  // 능력치 묶음별로 나눠 내보낸 6개 파일 — 합치면 47개가 전부 채워져야 한다
+  const files = ['ko-goalkeeping.html', 'ko-mixed.html', 'ko-technical.html',
+                 'ko-mental.html', 'ko-defensive.html', 'ko-physical.rtf'];
+  let squad = [];
+  for (const f of files) {
+    const res = IMP.parseSquad(fx(f));
+    assert.ok(res.players.length >= 20, `${f}: 선수를 ${res.players.length}명밖에 못 읽었다`);
+    assert.ok(res.report.attrColumns >= 8, `${f}: 능력치 열 ${res.report.attrColumns}개만 인식했다`);
+    // 값이 1~20인데 인식 못한 열이 남아 있으면 능력치 이름을 놓친 것이다
+    const missed = res.report.unknownColumns.filter((c) => c.numeric).map((c) => c.header);
+    assert.equal(missed.length, 0, `${f}: 능력치로 보이는데 인식 못한 열 — ${missed.join(', ')}`);
+    squad = IMP.mergeSquad(squad, res.players).players;
+  }
+  const gray = squad.find((p) => p.name === 'Archie Gray');
+  assert.ok(gray, '합친 스쿼드에서 선수를 찾지 못했다');
+  const filledIds = Object.keys(gray.attrs).filter((k) => gray.attrs[k] > 0);
+  assert.equal(filledIds.length, RD.ATTR_ORDER.length,
+    `6개 파일을 합쳤는데 능력치가 ${filledIds.length}/${RD.ATTR_ORDER.length}개다 — 빠진 것: ` +
+    [...RD.ATTR_ORDER].filter((a) => !gray.attrs[a]).join(', '));
+
+  // 골키퍼 표의 '스로인'은 던지기, 기술 표의 '스로인'은 롱 스로인이다
+  const gkOnly = IMP.parseSquad(fx('ko-goalkeeping.html'));
+  const techOnly = IMP.parseSquad(fx('ko-technical.html'));
+  assert.ok(gkOnly.players[0].attrs.thr > 0, "골키퍼 표의 '스로인'을 던지기로 읽지 못했다");
+  assert.equal(gkOnly.players[0].attrs.lth, undefined, "골키퍼 표의 '스로인'을 롱 스로인으로 읽었다");
+  assert.ok(techOnly.players[0].attrs.lth > 0, "기술 표의 '스로인'을 롱 스로인으로 읽지 못했다");
+  assert.equal(techOnly.players[0].attrs.thr, undefined, "기술 표의 '스로인'을 던지기로 읽었다");
+
+  // '위치'는 포지션이 아니라 위치 선정이다
+  const mental = IMP.parseSquad(fx('ko-mental.html'));
+  assert.ok(mental.players[0].attrs.pos > 0, "'위치'를 위치 선정으로 읽지 못했다");
+
+  // '선택한 포지션'은 전술에서 배정된 자리이지 등록 포지션이 아니다 — 무시해야 한다
+  assert.equal(mental.players[0].positions.length, 0,
+    "'선택한 포지션'을 등록 포지션으로 읽었다");
+  assert.equal(mental.report.unknownColumns.length, 0,
+    `아는 열이 미인식으로 보고됐다: ${mental.report.unknownColumns.map((c) => c.header).join(', ')}`);
+
+  // ── 전술 화면 내보내기에서 상대 포메이션 읽기 ──
+  const lineup = IMP.parseLineup(fx('ko-tactic-lineup.html'));
+  assert.deepEqual([...lineup.positions],
+    ['GK', 'DR', 'DC', 'DC', 'DL', 'DM', 'MC', 'MC', 'AMR', 'AML', 'ST'],
+    `전술 화면에서 읽은 자리: ${lineup.positions.join(' ')}`);
+  assert.ok(lineup.matches.includes('433dm'),
+    `포메이션을 4-3-3 DM 와이드로 알아보지 못했다: ${lineup.matches.join(', ')}`);
+
+  // 같은 파일에서 상대 스쿼드도 읽힌다 — 이름의 화면 조작 문구가 지워져야 한다
+  const oppSquad = IMP.parseSquad(fx('ko-tactic-lineup.html'));
+  assert.ok(oppSquad.players.length >= 20, `상대 스쿼드를 ${oppSquad.players.length}명만 읽었다`);
+  assert.ok(!oppSquad.players.some((p) => /선수\s*선발/.test(p.name)),
+    "이름에 '- 선수 선발'이 남아 있다");
+  assert.ok(!oppSquad.players.some((p) => /^[-\s]*$/.test(p.name)),
+    '아직 선수가 배정되지 않은 빈 자리를 선수로 읽었다');
+  assert.ok(oppSquad.players.some((p) => p.name === 'Brandon Thomas-Asante'),
+    '하이픈이 들어간 성이 잘렸다');
+  const withPos = oppSquad.players.filter((p) => p.positions.length);
+  assert.ok(withPos.length >= 20, `포지션을 읽은 선수가 ${withPos.length}명뿐이다`);
+  const vanEwijk = oppSquad.players.find((p) => p.name === 'Milan van Ewijk');
+  assert.deepEqual([...vanEwijk.positions].sort(), ['AMR', 'DR', 'MR', 'WBR'].sort(),
+    `'D/WB/M/AM (R)' 파싱 실패: ${vanEwijk.positions}`);
+}
+
+// ── 상대 스쿼드에서 성향 추정 ─────────────────────────────────────────────
+{
+  const mk = (name, positions, attrs) => ({ name, positions, attrs });
+  const opp = [
+    mk('빠른 공격수', ['ST'], { pac: 17, acc: 16, fin: 14 }),
+    mk('타깃 공격수', ['ST'], { hea: 16, jum: 15, str: 15, fin: 13 }),
+    mk('10번', ['AMC'], { pas: 16, vis: 16, tec: 15 }),
+    mk('수미', ['DM'], { pas: 16, vis: 15, tck: 13 }),
+    mk('느린 센터백A', ['DC'], { pac: 9, jum: 10, mar: 14 }),
+    mk('느린 센터백B', ['DC'], { pac: 10, jum: 11, mar: 13 }),
+    mk('골키퍼', ['GK'], { kic: 8, ref: 14, han: 13 }),
+    mk('윙어A', ['AMR'], { cro: 15, dri: 14, pac: 14 }),
+    mk('윙어B', ['AML'], { cro: 14, dri: 15, pac: 15 }),
+    mk('윙백', ['WBR'], { cro: 14, sta: 15, tck: 12 })
+  ];
+  const traits = E.inferOpponentTraits(opp).map((t) => t.id);
+  for (const want of ['fast-striker', 'target-man', 'playmaker-amc', 'playmaker-deep',
+                      'slow-cb', 'small-cb', 'weak-gk-dist', 'cross-heavy']) {
+    assert.ok(traits.includes(want), `상대 성향 '${want}'을 못 읽었다: ${traits.join(', ')}`);
+  }
+  // 근거가 함께 나와야 한다 — 근거 없이 성향만 켜면 확인할 수가 없다
+  for (const t of E.inferOpponentTraits(opp)) {
+    assert.ok(t.why && t.why.length > 5, `성향 ${t.id}에 근거가 없다`);
+    assert.ok(t.players.length > 0, `성향 ${t.id}에 근거가 된 선수가 없다`);
+  }
+  // 능력치가 없으면 아무 성향도 지어내면 안 된다
+  const noAttrs = opp.map((p) => ({ name: p.name, positions: p.positions, attrs: {} }));
+  assert.equal(E.inferOpponentTraits(noAttrs).length, 0, '능력치가 없는데 성향을 지어냈다');
+  assert.equal(E.inferOpponentTraits([]).length, 0);
+
+  // 실제 상대 파일(전술 화면)은 능력치가 없으므로 포메이션만 나와야 한다
+  const oppFile = IMP.parseSquad(read(path.join('tests/fixtures', 'ko-tactic-lineup.html')));
+  assert.equal(E.inferOpponentTraits(oppFile.players).length, 0,
+    '능력치 없는 상대 파일에서 성향을 지어냈다');
+  // 추정한 성향은 전부 실제 목록에 있는 id여야 한다 (오타면 영원히 무시된다)
+  for (const t of E.inferOpponentTraits(opp)) {
+    assert.ok(TRAIT_IDS.has(t.id), `추정이 목록에 없는 성향 '${t.id}'을 내놓았다`);
+  }
+}
+
+// ── 파일 인코딩 판별 ──────────────────────────────────────────────────────
+// UTF-16으로 내보내는 도구(윈도우 프로그램에 흔하다)의 파일을 UTF-8로 읽으면
+// 글자 사이에 널이 껴서 열 이름이 하나도 안 맞는다.
+{
+  const text = 'Name\tPosition\tAcc\n김민재\tD (C)\t13';
+  const utf16le = (withBom) => {
+    const units = [...text].map((c) => c.codePointAt(0));
+    const bytes = [];
+    if (withBom) bytes.push(0xFF, 0xFE);
+    for (const u of units) bytes.push(u & 0xFF, (u >> 8) & 0xFF);
+    return new Uint8Array(bytes).buffer;
+  };
+  assert.equal(IMP.decodeBytes(utf16le(true)), text, 'BOM 있는 UTF-16LE를 못 읽었다');
+  assert.equal(IMP.decodeBytes(utf16le(false)), text, 'BOM 없는 UTF-16LE를 못 읽었다');
+
+  const utf8 = new TextEncoder().encode(text);
+  assert.equal(IMP.decodeBytes(utf8.buffer), text, 'UTF-8을 잘못 읽었다');
+  const utf8Bom = new Uint8Array([0xEF, 0xBB, 0xBF, ...utf8]);
+  assert.equal(IMP.decodeBytes(utf8Bom.buffer), text, 'BOM 있는 UTF-8을 잘못 읽었다');
+
+  // 판별에 성공했다면 그대로 가져오기까지 되어야 한다
+  const viaBytes = IMP.parseSquad(IMP.decodeBytes(utf16le(true)));
+  assert.equal(viaBytes.players.length, 1);
+  assert.equal(viaBytes.players[0].name, '김민재');
+  assert.equal(viaBytes.players[0].attrs.acc, 13);
 }
 
 // ── 두 번에 나눠 내보낸 스쿼드를 합치기 ───────────────────────────────────

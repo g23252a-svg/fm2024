@@ -384,13 +384,16 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     tab: 'squad',
     editing: null,
     overlay: false,
-    importReport: null
+    importReport: null,
+    opponentSquad: [],
+    opponentReport: null
   };
 
   function save() {
     try {
       localStorage.setItem(STORE, JSON.stringify({
-        players: S.players, opponent: S.opponent, context: S.context, pinnedFormation: S.pinnedFormation
+        players: S.players, opponent: S.opponent, context: S.context,
+        pinnedFormation: S.pinnedFormation, opponentSquad: S.opponentSquad
       }));
     } catch (e) { /* 저장 공간이 없어도 이번 세션은 그대로 씁니다 */ }
   }
@@ -403,6 +406,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       if (d.opponent) Object.assign(S.opponent, d.opponent);
       if (d.context) Object.assign(S.context, d.context);
       if (d.pinnedFormation) S.pinnedFormation = d.pinnedFormation;
+      if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
     } catch (e) { /* 깨진 저장본은 무시하고 초기 상태로 */ }
   }
 
@@ -618,18 +622,38 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         ' · 능력치 열 ' + r.attrColumns + '개 인식'
       ])
     ];
-    if (r.noPosition) lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + r.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
+    if (r.noPosition && r.noPosition < r.imported) {
+      lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + r.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
+    }
     if (r.noAttrs && r.attrColumns) lines.push(h('div', { class: 'tiny muted', text: '능력치가 하나도 없는 선수 ' + r.noAttrs + '명.' }));
     if (r.unknownColumns && r.unknownColumns.length) {
-      lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' + r.unknownColumns.slice(0, 12).join(', ') + (r.unknownColumns.length > 12 ? ' 외 ' + (r.unknownColumns.length - 12) + '개' : '') }));
+      lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' +
+        r.unknownColumns.slice(0, 12).map(function (c) { return c.header + (c.numeric ? '(능력치?)' : ''); }).join(', ') +
+        (r.unknownColumns.length > 12 ? ' 외 ' + (r.unknownColumns.length - 12) + '개' : '') }));
     }
-    var box = h('div', { class: 'rep' }, lines);
-    if (r.attrColumns) return box;
+    var out = [h('div', { class: 'rep' }, lines)];
+
+    /*
+     * 포지션을 아무도 못 읽으면 선발 배치가 사실상 무작위가 됩니다 — 누가 어느
+     * 자리에 설 수 있는지 모른 채 능력치만으로 세우게 되기 때문입니다.
+     * 능력치가 없는 것보다 더 조용히 망가지므로 크게 알립니다.
+     */
+    if (r.imported && r.noPosition >= r.imported) {
+      out.push(h('div', { class: 'rep err', style: 'margin-top:8px' }, [
+        h('div', {}, [h('b', { text: '포지션 열이 없습니다.' }),
+          ' 누가 어느 자리에 설 수 있는지 모르면 선발이 능력치만 보고 짜여 뒤죽박죽이 됩니다.']),
+        h('div', { class: 'small', style: 'margin-top:7px;color:var(--dim)' }, [
+          'FM 보기 편집에서 ', h('b', { style: 'color:var(--text)', text: '포지션' }), ' 열을 넣고 다시 내보내세요. ',
+          h('b', { style: 'color:var(--text)', text: '「선택한 포지션」은 다릅니다' }),
+          ' — 그건 전술에서 지금 배정된 자리라 대개 비어 있습니다.'
+        ])
+      ]));
+    }
+    if (r.attrColumns) return h('div', {}, out);
 
     // 능력치 열이 하나도 없는 경우 — 손으로 47개를 치게 두면 안 되므로
     // 무엇을 하면 되는지 여기서 바로 알려 줍니다.
-    return h('div', {}, [
-      box,
+    return h('div', {}, out.concat([
       h('div', { class: 'rep err', style: 'margin-top:8px' }, [
         h('div', {}, [h('b', { text: '능력치 열이 하나도 없습니다.' }),
           ' 이 상태로는 포지션만 보고 역할을 정하게 됩니다.']),
@@ -644,7 +668,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
             ['내보내기 방법 보기'])
         ])
       ])
-    ]);
+    ]));
   }
 
   RENDER.squad = function (root) {
@@ -661,9 +685,11 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
             onchange: function (ev) {
               var f = ev.target.files && ev.target.files[0];
               if (!f) return;
+              // 바이트로 읽고 인코딩을 직접 판별합니다 — UTF-16으로 내보내는
+              // 도구의 파일을 UTF-8로 읽으면 열 이름이 하나도 안 맞습니다.
               var fr = new FileReader();
-              fr.onload = function () { doImport(String(fr.result)); };
-              fr.readAsText(f, 'utf-8');
+              fr.onload = function () { doImport(IMP.decodeBytes(fr.result)); };
+              fr.readAsArrayBuffer(f);
               ev.target.value = '';
             }
           });
@@ -946,6 +972,33 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   RENDER.opp = function (root) {
     var o = S.opponent;
 
+    // 상대 전술 화면 내보내기 — 시즌 전이라 정보가 없어도 포메이션은 여기 들어 있습니다.
+    var ota;
+    var icard = h('div', { class: 'card' }, [
+      h('h2', { text: '상대 전술 화면 가져오기' }),
+      h('div', { class: 'desc', text: 'FM에서 상대 팀 전술 화면을 내보내면 포메이션이 그대로 들어 있습니다. 스쿼드 화면을 내보내면 능력치에서 상대 성향까지 읽습니다.' }),
+      h('div', { class: 'row', style: 'margin-bottom:9px' }, [
+        (function () {
+          var input = h('input', {
+            type: 'file', accept: '.html,.htm,.rtf,.txt,.csv,.tsv', style: 'display:none',
+            onchange: function (ev) {
+              var f = ev.target.files && ev.target.files[0];
+              if (!f) return;
+              var fr = new FileReader();
+              fr.onload = function () { readOpponent(IMP.decodeBytes(fr.result)); };
+              fr.readAsArrayBuffer(f);
+              ev.target.value = '';
+            }
+          });
+          return h('span', {}, [input, h('button', { class: 'btn', onclick: function () { input.click(); } }, ['파일 선택'])]);
+        })(),
+        h('button', { class: 'btn', onclick: function () { readOpponent(ota.value); } }, ['붙여넣은 내용 읽기'])
+      ]),
+      (ota = h('textarea', { placeholder: '상대 전술 화면 또는 스쿼드 화면 내보내기 내용', 'aria-label': '상대 데이터 붙여넣기' })),
+      oppReportBox()
+    ]);
+    root.appendChild(icard);
+
     var fcard = h('div', { class: 'card' }, [
       h('h2', { text: '상대 포메이션' }),
       h('div', { class: 'desc', text: '모르면 비워 두어도 됩니다 — 형태 맞물림 분석만 빠지고 나머지는 그대로 나옵니다.' })
@@ -1042,6 +1095,79 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     ]));
   };
 
+  /*
+   * 상대 데이터 읽기.
+   * 같은 파일에서 두 가지를 뽑습니다 — 전술 화면이면 자리 목록에서 포메이션을,
+   * 능력치가 있으면 스쿼드에서 성향을. 둘 중 하나만 나와도 그것만 반영합니다.
+   */
+  function readOpponent(text) {
+    if (!text || !text.trim()) { toast('읽을 내용이 비어 있습니다.'); return; }
+    var rep = { formation: null, matches: [], traits: [], players: 0, attrPlayers: 0 };
+
+    var lineup = IMP.parseLineup(text);
+    if (lineup.matches.length) {
+      S.opponent.formationId = lineup.matches[0];
+      rep.formation = lineup.matches[0];
+      rep.matches = lineup.matches;
+    } else if (lineup.positions.length) {
+      rep.positions = lineup.positions;
+    }
+
+    var squad = IMP.parseSquad(text);
+    if (squad.players.length) {
+      rep.players = squad.players.length;
+      rep.attrPlayers = squad.players.filter(function (p) { return Object.keys(p.attrs || {}).length >= 3; }).length;
+      S.opponentSquad = IMP.mergeSquad(S.opponentSquad || [], squad.players).players;
+      var traits = E.inferOpponentTraits(S.opponentSquad);
+      rep.traits = traits;
+      traits.forEach(function (t) {
+        if (S.opponent.traits.indexOf(t.id) < 0) S.opponent.traits.push(t.id);
+      });
+    }
+    S.opponentReport = rep;
+    save(); render(); window.scrollTo(0, 0);
+  }
+
+  function oppReportBox() {
+    var r = S.opponentReport;
+    if (!r) return h('div');
+    var lines = [];
+    if (r.formation) {
+      var f = E.FORMATION_BY_ID[r.formation];
+      lines.push(h('div', {}, [
+        h('b', { text: '포메이션 인식: ' + (f ? f.ko : r.formation) }),
+        r.matches.length > 1
+          ? h('span', { class: 'tiny muted', text: '  (자리 배치가 같은 형태: ' + r.matches.map(function (id) {
+              return E.FORMATION_BY_ID[id] ? E.FORMATION_BY_ID[id].ko : id;
+            }).join(' / ') + ' — 아래에서 바꿀 수 있습니다)' })
+          : null
+      ]));
+    } else if (r.positions) {
+      lines.push(h('div', { class: 'tiny muted', text: '자리 ' + r.positions.length + '개를 읽었지만 11명이 아니라 포메이션을 정하지 못했습니다: ' + r.positions.join(' ') }));
+    }
+    if (r.players) {
+      lines.push(h('div', { class: 'tiny muted', text: '상대 선수 ' + r.players + '명 · 능력치가 있는 선수 ' + r.attrPlayers + '명' }));
+    }
+    if (r.traits && r.traits.length) {
+      var ul = h('ul', { style: 'margin:7px 0 0;padding-left:17px' });
+      r.traits.forEach(function (t) {
+        var meta = TD.OPP_TRAITS.filter(function (x) { return x.id === t.id; })[0];
+        ul.appendChild(h('li', { class: 'tiny' }, [
+          h('b', { style: 'color:var(--acc)', text: (meta ? meta.ko : t.id) + ' ' }),
+          t.why + (t.players.length ? ' (' + t.players.join(', ') + ')' : '')
+        ]));
+      });
+      lines.push(h('div', { class: 'tiny', style: 'margin-top:6px', text: '아래 「상대 특징」에 자동으로 켠 항목:' }));
+      lines.push(ul);
+    } else if (r.players && !r.attrPlayers) {
+      lines.push(h('div', { class: 'tiny muted', text: '능력치 열이 없어 성향은 읽지 못했습니다 — 상대 스쿼드를 능력치 포함 보기로 내보내면 자동으로 채워집니다.' }));
+    }
+    if (!lines.length) {
+      return h('div', { class: 'rep err' }, ['포메이션도 선수도 읽지 못했습니다. 상대 팀 전술 화면 또는 스쿼드 화면을 내보낸 파일인지 확인하세요.']);
+    }
+    return h('div', { class: 'rep' }, lines);
+  }
+
   function segment(options, value, onChange) {
     var seg = h('div', { class: 'seg' });
     options.forEach(function (o) {
@@ -1111,6 +1237,23 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
           : null
       ])
     ]));
+
+    // 포지션이 비어 있으면 아래 결과 전체를 믿을 수 없으므로 맨 위에서 말합니다.
+    var noPos = res.xi.lineup.filter(function (l) {
+      return l.player && !(l.player.positions || []).length;
+    }).length;
+    if (noPos >= 3) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'warn high' }, [
+          h('span', { class: 'ic', text: '!' }),
+          h('span', {}, [
+            h('b', { text: '선발 ' + noPos + '명의 등록 포지션을 모릅니다. ' }),
+            '아래 배치는 능력치만 보고 세운 것이라 실제로 쓸 수 없습니다. ',
+            'FM 보기에 ', h('b', { text: '포지션' }), ' 열을 넣어 다시 내보내거나, 스쿼드 탭에서 선수마다 포지션을 지정하세요.'
+          ])
+        ])
+      ]));
+    }
 
     // 경고
     if (res.warnings.length) {
@@ -1568,9 +1711,22 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   }
 
   // ── 서비스 워커 ─────────────────────────────────────────────────────────
+  // 새 버전이 준비되면 곧바로 넘겨받습니다. 예전에는 캐시 우선이라 한 번 연
+  // 사람에게 계속 옛 버전이 나갔고, 고친 내용이 전달되지 않았습니다.
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function () { /* 오프라인 캐시는 없어도 동작합니다 */ });
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        reg.addEventListener('updatefound', function () {
+          var sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener('statechange', function () {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              toast('새 버전이 준비됐습니다. 새로고침하세요.');
+            }
+          });
+        });
+        reg.update();
+      }).catch(function () { /* 오프라인 캐시는 없어도 동작합니다 */ });
     });
   }
 
