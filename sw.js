@@ -1,6 +1,6 @@
-const VERSION='1.4.1';
+const VERSION='1.5.0';
 const CACHE='fm24-tactics-'+VERSION;
-const ASSETS=['./','./index.html','./engine.js','./importer.js','./data/roles.js','./data/formations.js','./data/setpieces.js','./data/tactics.js','./manifest.webmanifest','./icon.svg'];
+const ASSETS=['./','./index.html','./engine.js','./importer.js','./data/roles.js','./data/formations.js','./data/setpieces.js','./data/traits.js','./data/tactics.js','./manifest.webmanifest','./icon.svg'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(
   caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())

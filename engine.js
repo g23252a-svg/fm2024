@@ -184,15 +184,57 @@
     var fam = positionFamiliarity(player, role._slotPos || role.pos[0]);
     var footAdj = footAdjust(player, role, role._slotPos);
     var req = requirementCheck(player, role, get);
+    var tr = traitAdjust(player, role);
 
     return {
-      score: clamp(base * fam * footAdj * req.factor, 0, 100),
+      score: clamp(base * fam * footAdj * req.factor * tr.factor, 0, 100),
       raw: base,
       familiarity: fam,
       reqFactor: req.factor,
       reqFail: req.fail,
+      traitFactor: tr.factor,
+      traitHits: tr.hits,
       coverage: total ? known / total : 0
     };
+  }
+
+  /*
+   * 선수 특성 보정.
+   *
+   * 특성은 능력치보다 강하게 역할을 바꿉니다. 「측면 라인 붙기」가 있는 선수를
+   * 인사이드 포워드로 세우면 그 역할이 하려는 것을 선수가 하지 않습니다.
+   * 반대로 「안쪽으로 파고들기」가 있으면 윙어로 세워도 안으로 들어옵니다.
+   *
+   * 능력치처럼 평균에 섞지 않고 곱으로 둡니다 — 특성은 "조금 잘한다"가 아니라
+   * "그 행동을 한다/안 한다"이기 때문입니다.
+   */
+  var TRAIT_BY_ID = null;
+  function traitById(id) {
+    if (!TRAIT_BY_ID) {
+      TRAIT_BY_ID = {};
+      var TD2 = root.FM_TRAIT_DATA;
+      if (TD2) TD2.TRAITS.forEach(function (t) { TRAIT_BY_ID[t.id] = t; });
+    }
+    return TRAIT_BY_ID[id] || null;
+  }
+
+  function traitAdjust(player, role) {
+    var ids = player.traits || [];
+    if (!ids.length) return { factor: 1, hits: [] };
+    var tags = role.tags || [];
+    var pct = 0, hits = [];
+    ids.forEach(function (id) {
+      var t = traitById(id);
+      if (!t) return;
+      var d = 0;
+      if (t.fit) {
+        tags.forEach(function (tag) { if (t.fit[tag]) d += t.fit[tag]; });
+      }
+      if (t.roleFit && t.roleFit[role.id]) d += t.roleFit[role.id];
+      if (d) { pct += d; hits.push({ id: id, ko: t.ko, delta: d }); }
+    });
+    // 특성이 여러 개 겹쳐도 역할 점수가 뒤집히지는 않게 폭을 제한합니다.
+    return { factor: clamp(1 + pct / 100, 0.6, 1.35), hits: hits };
   }
 
   /*
@@ -1545,6 +1587,7 @@
   // ── 개인 지시 ─────────────────────────────────────────────────────────
   function individualInstructions(xi, opp, planTop, axes) {
     var out = [];
+    var traitNotes = [];
     var oppTraits = opp.traits || [];
     var planIds = planTop.map(function (p) { return p.id; });
     function planHas(id) { return planIds.indexOf(id) >= 0; }
@@ -1634,8 +1677,53 @@
         pi.push({ text: '더 자주 슛', why: '중거리 슛 ' + lon + ' + 상대가 내려앉음 — 박스 앞이 막혔을 때의 대안입니다.' });
       }
 
+      /*
+       * 선수 특성으로 걸러 냅니다.
+       *
+       * 특성은 지시로 켜고 끄는 것이 아니라 선수에게 박힌 습관입니다. 그래서
+       *  - 특성이 이미 하고 있는 지시는 뺍니다(중복해서 켤 이유가 없습니다).
+       *  - 특성과 정면으로 부딪히는 지시는 지우지 않고 "소용없다"고 표시합니다 —
+       *    조용히 빼면 왜 그 조언이 없는지 알 수 없고, 사용자는 직접 켜 버립니다.
+       */
+      var traitIds = (l.player && l.player.traits) || [];
+      if (traitIds.length) {
+        var makes = {}, fightsBy = {};
+        traitIds.forEach(function (id) {
+          var t = traitById(id);
+          if (!t) return;
+          (t.makes || []).forEach(function (x) { makes[x] = t.ko; });
+          (t.fights || []).forEach(function (x) { fightsBy[x] = t.ko; });
+        });
+        pi = pi.filter(function (item) {
+          if (item.locked) return true;
+          if (makes[item.text]) {
+            traitNotes.push({
+              slot: l.slot, player: l.player,
+              text: '「' + item.text + '」은 넣지 않았습니다 — 특성 「' + makes[item.text] + '」이 이미 그 행동입니다.'
+            });
+            return false;
+          }
+          return true;
+        });
+        pi.forEach(function (item) {
+          if (fightsBy[item.text]) {
+            item.blockedBy = fightsBy[item.text];
+            item.why = (item.why ? item.why + ' ' : '')
+              + '다만 특성 「' + fightsBy[item.text] + '」과 반대 방향이라 지시만으로는 바뀌지 않습니다.';
+          }
+        });
+        // 특성 자체가 알려 줄 것이 있으면 그대로 붙입니다.
+        traitIds.forEach(function (id) {
+          var t = traitById(id);
+          if (t && t.warn) {
+            pi.push({ text: '특성: ' + t.ko, why: t.warn, trait: true });
+          }
+        });
+      }
+
       if (pi.length) out.push({ slot: l.slot, role: l.role, duty: l.duty, player: l.player, items: pi });
     });
+    out.traitNotes = traitNotes;
     return out;
   }
 
@@ -2156,7 +2244,18 @@
     if (!seen || !wsum) return null;
     // 값을 아는 항목이 절반도 안 되면 판단하지 않습니다.
     if (seen < Math.ceil(Object.keys(spec.weight).length / 2)) return null;
-    return Math.round((sum / wsum) * 10) / 10;
+    var score = (sum / wsum);
+    // 「감아 차기」 같은 특성은 같은 능력치라면 이 선수를 키커로 만듭니다.
+    var key = spec.id === 'taker' ? 'corner'
+      : spec.id === 'fk-direct' ? 'fkDirect'
+        : spec.id === 'fk-wide' ? 'fkDirect' : null;
+    if (key) {
+      ((player && player.traits) || []).forEach(function (id) {
+        var t = traitById(id);
+        if (t && t.setPiece && t.setPiece[key]) score += t.setPiece[key];
+      });
+    }
+    return Math.round(score * 10) / 10;
   }
 
   function meetsNeed(player, spec) {
@@ -2299,6 +2398,198 @@
       attack: attack, defence: defence, specialists: specialists,
       swing: swing, verdict: verdict, weakDefence: weakDef,
       known: known, boxMean: boxMean
+    };
+  }
+
+  /*
+   * ── 훈련 제안 ───────────────────────────────────────────────────────────
+   *
+   * 지금까지 이 도구는 "이 자리에 사람이 없으니 영입하라"까지만 말했습니다.
+   * 그런데 FM에서 훨씬 싼 해법은 **추가 포지션 훈련**입니다 — 이미 스쿼드에 있는
+   * 선수가 그 자리를 배우면 됩니다. 판단에 필요한 값은 이미 다 계산하고 있습니다.
+   *
+   * 두 가지를 냅니다.
+   *   1. 포지션 훈련 — 비어 있는 자리를 누가 배우면 메워지는가
+   *   2. 개인 훈련 초점 — 선발 각자가 지금 역할에서 가장 손해 보고 있는 능력치
+   */
+  /*
+   * 훈련으로 배울 수 있는 범위.
+   *   LEARN_FLOOR : 이 아래로 낯선 자리는 훈련 대상이 아닙니다(옆자리가 아님).
+   *   LEARN_CEIL  : 배워도 원래 자리만큼 자연스러워지지는 않습니다.
+   */
+  var LEARN_FLOOR = 0.55;
+  var LEARN_CEIL = 0.85;
+  var TRAIN_AGE_NOTE = {
+    young: '어려서 새 포지션을 빨리 배웁니다.',
+    ok: '',
+    old: '나이가 있어 습득이 느립니다 — 급하면 영입이 빠릅니다.'
+  };
+  function ageBand(age) {
+    if (typeof age !== 'number' || !age) return 'ok';
+    if (age <= 23) return 'young';
+    if (age >= 30) return 'old';
+    return 'ok';
+  }
+
+  function trainingPlan(input) {
+    var players = (input.players || []).filter(function (p) { return !p.out; });
+    var base = baseTactic(input);
+    if (!base) return null;
+
+    var lineup = base.xi.lineup;
+
+    /*
+     * 1) 포지션 훈련.
+     *
+     * 자리마다 "지금 그 자리를 등록 포지션으로 가진 선수"가 몇 명인지 셉니다.
+     * 모자란 자리에 대해, 배우면 가장 크게 오르는 선수를 찾습니다. 적합도는
+     * 이미 친숙도를 곱해서 내므로, 친숙도만 1로 두고 다시 계산하면
+     * "배운 뒤의 값"이 그대로 나옵니다.
+     */
+    var posTraining = [];
+    var slotPos = {};
+    lineup.forEach(function (l) { slotPos[l.slot.pos] = (slotPos[l.slot.pos] || 0) + 1; });
+
+    Object.keys(slotPos).forEach(function (pos) {
+      var natural = players.filter(function (p) {
+        return (p.positions || []).indexOf(pos) >= 0;
+      });
+      // 선발 자리 수보다 그 자리를 뛸 수 있는 사람이 많으면 훈련이 필요 없습니다.
+      if (natural.length > slotPos[pos]) return;
+
+      var slot = lineup.filter(function (l) { return l.slot.pos === pos; })[0];
+      if (!slot) return;
+      var role = slot.role;
+
+      var best = null;
+      players.forEach(function (p) {
+        if ((p.positions || []).indexOf(pos) >= 0) return;      // 이미 뛸 수 있음
+        var r = Object.create(role);
+        r._slotPos = pos;
+        var now = roleFit(p, r, slot.duty);
+        /*
+         * 옆자리만 제안합니다.
+         *
+         * 처음에는 친숙도가 낮을수록 이득이 커 보여서 골키퍼에게 왼쪽 수비를
+         * 배우라고 했습니다 — 친숙도 0.05로 나누니 이득이 폭발했기 때문입니다.
+         * 실제로 배울 만한 것은 옆자리뿐이고, 그 밖은 훈련이 아니라 영입 문제입니다.
+         */
+        if (now.familiarity < LEARN_FLOOR || now.familiarity >= LEARN_CEIL) return;
+        // 훈련해도 '자연스러움'까지는 잘 가지 않습니다. 현실적인 천장을 둡니다.
+        var learned = clamp(now.score / now.familiarity * LEARN_CEIL, 0, 100);
+        var gain = learned - now.score;
+        if (gain < 4) return;
+        var band = ageBand(p.age);
+        // 어린 선수가 같은 이득이면 먼저입니다 — 실제로 더 빨리 배웁니다.
+        var rank = gain * (band === 'young' ? 1.25 : band === 'old' ? 0.7 : 1);
+        if (!best || rank > best.rank) {
+          best = {
+            rank: rank, player: p, pos: pos, role: role,
+            now: Math.round(now.score), after: Math.round(learned),
+            gain: Math.round(gain), band: band, age: p.age || null,
+            familiarity: Math.round(now.familiarity * 100)
+          };
+        }
+      });
+      if (!best) return;
+      posTraining.push({
+        pos: pos, posKo: posKo(pos), roleKo: role.ko,
+        name: best.player.name, age: best.age, band: best.band,
+        now: best.now, after: best.after, gain: best.gain,
+        naturals: natural.length, slots: slotPos[pos],
+        text: best.player.name + eul(best.player.name) + ' ' + posKo(pos) + '에 추가 포지션 훈련',
+        why: natural.length === 0
+          ? posKo(pos) + eul(posKo(pos)) + ' 등록 포지션으로 가진 선수가 한 명도 없습니다 — 지금은 남의 자리에 세워 두고 있습니다.'
+          : posKo(pos) + eul(posKo(pos)) + ' 뛸 수 있는 선수가 ' + natural.length + '명인데 선발에서 '
+            + slotPos[pos] + '자리를 씁니다 — 한 명만 빠지면 메울 사람이 없습니다.',
+        gainText: '적합도 ' + best.now + ' → ' + best.after + ' (+' + best.gain + ')',
+        ageNote: TRAIN_AGE_NOTE[best.band]
+      });
+    });
+    posTraining.sort(function (a, b) { return b.gain - a.gain; });
+
+    /*
+     * 2) 개인 훈련 초점.
+     *
+     * 선발 각자가 지금 맡은 역할에서 가장 손해 보고 있는 능력치를 찾습니다.
+     * 역할이 강조하는 능력치(key) 중 팀 안에서도 낮고 역할 요구에도 못 미치는 것.
+     * 요구치를 못 넘긴 항목이 있으면 그게 최우선입니다 — 역할의 전제 자체입니다.
+     */
+    var focus = [];
+    lineup.forEach(function (l) {
+      if (!l.player) return;
+      var a = l.player.attrs || {};
+      var role = Object.create(l.role);
+      role._slotPos = l.slot.pos;
+      var fit = roleFit(l.player, role, l.duty);
+
+      // 요구치 미달이 있으면 그것부터.
+      if (fit.reqFail && fit.reqFail.length) {
+        var worst = fit.reqFail.slice().sort(function (x, y) {
+          return (x.have / x.need) - (y.have / y.need);
+        })[0];
+        focus.push({
+          name: l.player.name, pos: l.slot.pos, roleKo: l.role.ko,
+          attr: worst.attr, attrKo: RD.ATTRS[worst.attr].ko,
+          have: worst.have, want: worst.need, kind: 'req',
+          band: ageBand(l.player.age), age: l.player.age || null,
+          why: l.role.ko + iga(l.role.ko) + ' 성립하려면 ' + RD.ATTRS[worst.attr].ko + ' ' + worst.need
+            + iga(String(worst.need)) + ' 필요한데 ' + worst.have + '입니다 — 역할의 전제가 무너진 상태입니다.'
+        });
+        return;
+      }
+      // 아니면 key 능력치 중 가장 낮은 것.
+      var cands = (l.role.key || []).map(function (id) {
+        var v = a[id];
+        return (typeof v === 'number' && v > 0) ? { id: id, v: v } : null;
+      }).filter(Boolean).sort(function (x, y) { return x.v - y.v; });
+      if (!cands.length) return;
+      var low = cands[0];
+      if (low.v >= 13) return;   // 이미 쓸 만하면 굳이 훈련 초점을 잡지 않습니다
+      focus.push({
+        name: l.player.name, pos: l.slot.pos, roleKo: l.role.ko,
+        attr: low.id, attrKo: RD.ATTRS[low.id].ko,
+        have: low.v, want: null, kind: 'key',
+        band: ageBand(l.player.age), age: l.player.age || null,
+        why: l.role.ko + iga(l.role.ko) + ' 가장 많이 쓰는 능력치 중 ' + RD.ATTRS[low.id].ko
+          + iga(RD.ATTRS[low.id].ko) + ' ' + low.v + ro(String(low.v)) + ' 가장 낮습니다.'
+      });
+    });
+    focus.sort(function (x, y) {
+      if (x.kind !== y.kind) return x.kind === 'req' ? -1 : 1;
+      return x.have - y.have;
+    });
+
+    /*
+     * 3) 나이 — 2년 뒤에 비는 자리.
+     *
+     * age를 읽고 있으면서 아무 데도 쓰지 않고 있었습니다. 지금 멀쩡한 자리라도
+     * 주전이 30대이고 뒤가 비어 있으면 그건 곧 영입이 필요한 자리입니다.
+     */
+    var ageing = [];
+    lineup.forEach(function (l) {
+      if (!l.player || typeof l.player.age !== 'number' || l.player.age < 30) return;
+      var pos = l.slot.pos;
+      var younger = players.filter(function (p) {
+        return p.name !== l.player.name
+          && (p.positions || []).indexOf(pos) >= 0
+          && typeof p.age === 'number' && p.age <= 26;
+      });
+      ageing.push({
+        name: l.player.name, age: l.player.age, pos: pos, posKo: posKo(pos), roleKo: l.role.ko,
+        successors: younger.map(function (p) { return p.name; }),
+        text: l.player.name + '(' + l.player.age + '세) · ' + posKo(pos),
+        why: younger.length
+          ? '뒤에 ' + younger.map(function (p) { return p.name + '(' + p.age + '세)'; }).join(', ')
+            + iga('세)') + ' 있습니다 — 지금부터 출전 시간을 나눠 두면 됩니다.'
+          : '이 자리에 26세 이하 자원이 없습니다. 지금은 문제가 없어도 2년 안에 비는 자리입니다.'
+      });
+    });
+    ageing.sort(function (x, y) { return (x.successors.length - y.successors.length) || (y.age - x.age); });
+
+    return {
+      position: posTraining, focus: focus, ageing: ageing,
+      formation: base.xi.formation, plan: base.plan
     };
   }
 
@@ -2515,6 +2806,8 @@
     inMatchAdvice: inMatchAdvice,
     chemistry: chemistry,
     setPieces: setPieces,
+    trainingPlan: trainingPlan,
+    traitAdjust: traitAdjust,
     splitAvailable: splitAvailable,
     josa: { ro: ro, eul: eul, iga: iga, eun: eun, wa: wa, ira: ira },
     generate: generate,

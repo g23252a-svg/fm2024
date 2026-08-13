@@ -27,11 +27,12 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
 const ctx = { window: {}, TextDecoder, TextEncoder, Uint8Array, ArrayBuffer };
 vm.createContext(ctx);
-for (const file of ['data/roles.js', 'data/formations.js', 'data/setpieces.js', 'data/tactics.js',
+for (const file of ['data/roles.js', 'data/formations.js', 'data/setpieces.js', 'data/traits.js', 'data/tactics.js',
                     'engine.js', 'importer.js']) {
   vm.runInContext(read(file), ctx, { filename: file });
 }
-const { FM_ROLE_DATA: RD, FM_FORMATION_DATA: FD, FM_TACTIC_DATA: TD, FM_ENGINE: E } = ctx.window;
+const { FM_ROLE_DATA: RD, FM_FORMATION_DATA: FD, FM_TACTIC_DATA: TD,
+  FM_TRAIT_DATA: TRD, FM_ENGINE: E } = ctx.window;
 
 /*
  * 난수는 씨앗을 고정합니다. 실패했을 때 같은 스쿼드를 다시 만들 수 없으면
@@ -58,9 +59,14 @@ function makeSquad(n, opts = {}) {
       const p = pick(POS);
       if (!positions.includes(p)) positions.push(p);
     }
+    // 특성은 역할 적합도와 개인 지시를 바꾸므로 여기서도 섞습니다.
+    const traits = opts.noTraits ? []
+      : TRD.TRAITS.filter(() => rnd() < 0.12).map((t) => t.id);
     out.push({
       id: 'p' + i, name: '선수' + i, positions,
-      foot: pick(['L', 'R', 'B', undefined]), age: int(16, 38), attrs
+      foot: pick(['L', 'R', 'B', undefined]),
+      age: opts.noAge ? undefined : int(16, 38),
+      traits, attrs
     });
   }
   return out;
@@ -154,8 +160,42 @@ const CASES = [
   ['전원 약함', { n: 26, lo: 1, hi: 8 }],
   ['전원 강함', { n: 26, lo: 16, hi: 20 }],
   ['빠듯한 인원', { n: 12 }],
-  ['모자란 인원', { n: 9 }]                      // 11명이 안 되면 조용히 비워야 한다
+  ['모자란 인원', { n: 9 }],                     // 11명이 안 되면 조용히 비워야 한다
+  ['나이·특성 모름', { n: 26, noAge: true, noTraits: true }]
 ];
+
+/*
+ * 훈련 제안은 조언이 실제로 따라 할 수 있는 것이어야 합니다.
+ * 골키퍼에게 왼쪽 수비를 배우라고 한 적이 있어서 여기서 못박습니다.
+ */
+function checkTraining(tag, players, standing) {
+  let tp;
+  try { tp = E.trainingPlan({ players, standing }); } catch (e) { fail(tag, 'throw ' + e.message); return; }
+  if (!tp) return;
+  const byName = {};
+  players.forEach((p) => { byName[p.name] = p; });
+  for (const t of tp.position) {
+    const p = byName[t.name];
+    if (!p) { fail(tag, `없는 선수 ${t.name}에게 훈련을 시켰다`); continue; }
+    const isGk = (p.positions || []).length > 0 && (p.positions || []).every((x) => x === 'GK');
+    if (isGk !== (t.pos === 'GK') && (isGk || t.pos === 'GK')) {
+      fail(tag, `골키퍼와 필드를 오가는 훈련을 제안했다: ${t.name}(${(p.positions || []).join('/')}) → ${t.pos}`);
+    }
+    if ((p.positions || []).includes(t.pos)) fail(tag, `이미 뛸 수 있는 자리를 배우라고 했다: ${t.name} → ${t.pos}`);
+    if (!(t.after > t.now)) fail(tag, `이득이 없는 훈련을 제안했다: ${t.name} ${t.now}→${t.after}`);
+    if (t.after > 100 || t.now < 0) fail(tag, `적합도가 범위를 벗어났다: ${t.now}→${t.after}`);
+  }
+  for (const f of tp.focus) {
+    if (!RD.ATTRS[f.attr]) fail(tag, `알 수 없는 능력치 ${f.attr}`);
+    if (f.want != null && !(f.have < f.want)) fail(tag, `이미 넘긴 능력치를 훈련하라고 했다: ${f.attrKo} ${f.have}/${f.want}`);
+  }
+  for (const a of tp.ageing) {
+    if (!(a.age >= 30)) fail(tag, `30세 미만을 노쇠 자리로 봤다: ${a.name} ${a.age}세`);
+  }
+  checkStrings(tag, tp.position);
+  checkStrings(tag, tp.focus);
+  checkStrings(tag, tp.ageing);
+}
 
 let runs = 0;
 for (const [label, opts] of CASES) {
@@ -173,6 +213,7 @@ for (const [label, opts] of CASES) {
       checkStrings(tag, base.instructions);
       checkStrings(tag, base.warnings);
       checkSetPieces(tag, base.xi);
+      checkTraining(`훈련/${label}/${standing}`, squad, standing);
     }
 
     for (const f of FD.FORMATIONS) {
@@ -201,6 +242,7 @@ for (const [label, opts] of CASES) {
       checkStrings(tag, r.instructions);
       checkStrings(tag, r.warnings);
       checkStrings(tag, r.individual);
+      checkStrings(tag, r.individual.traitNotes || []);
       checkSetPieces(tag, r.xi);
 
       // 교체 자원에 선발이 들어가면 그 선수를 두 번 쓰게 된다

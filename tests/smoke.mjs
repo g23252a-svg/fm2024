@@ -12,13 +12,13 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 // 브라우저에 있는 전역만 넣는다 — 여기 없는 것을 쓰면 실제로도 깨진다.
 const ctx = { window: {}, TextDecoder, TextEncoder, Uint8Array, ArrayBuffer };
 vm.createContext(ctx);
-for (const file of ['data/roles.js', 'data/formations.js', 'data/setpieces.js', 'data/tactics.js', 'engine.js', 'importer.js']) {
+for (const file of ['data/roles.js', 'data/formations.js', 'data/setpieces.js', 'data/traits.js', 'data/tactics.js', 'engine.js', 'importer.js']) {
   vm.runInContext(read(file), ctx, { filename: file });
 }
 const { FM_ROLE_DATA: RD, FM_FORMATION_DATA: FD, FM_TACTIC_DATA: TD,
-  FM_SETPIECE_DATA: SD, FM_ENGINE: E, FM_IMPORTER: IMP } = ctx.window;
+  FM_SETPIECE_DATA: SD, FM_TRAIT_DATA: TRD, FM_ENGINE: E, FM_IMPORTER: IMP } = ctx.window;
 
-assert.ok(RD && FD && TD && SD && E && IMP, '전역이 하나라도 비어 있다');
+assert.ok(RD && FD && TD && SD && TRD && E && IMP, '전역이 하나라도 비어 있다');
 
 // ── index.html이 실제 브라우저에서 파싱되는지 ──────────────────────────────
 const html = read('index.html');
@@ -1692,6 +1692,227 @@ function run(opponent = {}, context = {}, players = squad) {
       assert.equal(bad.length, 0,
         `기본 전술(${standing})이 스스로 낸 조합에서 걸렸다: ${bad.map((x) => x.text).join(' / ')}`);
     }
+  }
+}
+
+// ── 선수 특성 ─────────────────────────────────────────────────────────────
+/*
+ * 특성은 능력치보다 강하게 역할을 바꾼다. 「측면 라인 붙기」가 있는 선수를
+ * 인사이드 포워드로 세우면 그 역할이 하려는 것을 선수가 하지 않는다.
+ * 내보내기 파일에 안 들어 있어 화면에서 직접 켜야 하므로, 켠 값이 실제로
+ * 결과를 바꾸는지가 이 기능의 전부다.
+ */
+{
+  /*
+   * 엔진이 실제로 내놓을 수 있는 개인 지시 문구 전부.
+   * 소스에서 직접 긁는다 — 목록을 손으로 적어 두면 그 목록이 먼저 낡는다.
+   */
+  const INSTR_TEXTS = new Set([
+    ...[...read('engine.js').matchAll(/pi\.push\(\{\s*text:\s*'([^']+)'/g)].map((m) => m[1]),
+    ...RD.ROLES.flatMap((r) => r.locked || [])
+  ]);
+  assert.ok(INSTR_TEXTS.size >= 10, `개인 지시 문구를 ${INSTR_TEXTS.size}개만 찾았다 — 추출이 깨졌다`);
+
+  const ROLE_TAGS = new Set(RD.ROLES.flatMap((r) => r.tags || []));
+  const ROLE_IDS3 = new Set(RD.ROLES.map((r) => r.id));
+  const seenTrait = new Set();
+  for (const t of TRD.TRAITS) {
+    assert.ok(!seenTrait.has(t.id), `특성 id 중복: ${t.id}`);
+    seenTrait.add(t.id);
+    assert.ok(t.ko && t.en && t.group, `특성 ${t.id}에 이름이 빠졌다`);
+    // 영문 이름이 기준이다 — 한국어 표기는 판본에 따라 다를 수 있다
+    assert.ok(/^[A-Za-z' -]+$/.test(t.en), `특성 ${t.id}의 영문 이름이 이상하다: ${t.en}`);
+    for (const tag of Object.keys(t.fit || {})) {
+      assert.ok(ROLE_TAGS.has(tag), `특성 ${t.id}가 없는 역할 태그 ${tag}를 가리킨다`);
+    }
+    for (const id of Object.keys(t.roleFit || {})) {
+      assert.ok(ROLE_IDS3.has(id), `특성 ${t.id}가 없는 역할 ${id}을 가리킨다`);
+    }
+    /*
+     * makes/fights에 적은 지시 문구는 엔진이 실제로 내놓는 것과 글자까지 같아야
+     * 한다. 한 글자만 틀려도 아무 일도 일어나지 않고, 그런 건 눈으로는 안 보인다.
+     */
+    for (const x of [...(t.makes || []), ...(t.fights || [])]) {
+      assert.ok(INSTR_TEXTS.has(x),
+        `특성 ${t.id}의 '${x}'는 엔진이 내놓는 개인 지시 문구가 아니다 — 오타면 조용히 아무 일도 안 한다`);
+    }
+  }
+
+  const mk3 = (n, pos, over, traits) => {
+    const a = {};
+    for (const id of RD.ATTR_ORDER) a[id] = 11;
+    Object.assign(a, over || {});
+    return { id: n, name: n, positions: pos, foot: 'R', age: 25, attrs: a, traits: traits || [] };
+  };
+  const rest = [
+    mk3('GK', ['GK'], { ref: 14, han: 13, cmd: 13, ono: 13, aer: 13 }),
+    mk3('DR', ['DR'], { tck: 13, mar: 13, cro: 12, sta: 14 }),
+    mk3('DC1', ['DC'], { mar: 14, tck: 14, hea: 14, jum: 14 }),
+    mk3('DC2', ['DC'], { mar: 14, tck: 14, hea: 14, jum: 14 }),
+    mk3('DL', ['DL'], { tck: 13, mar: 13, cro: 12, sta: 14 }),
+    mk3('MC1', ['MC'], { pas: 14, tck: 13, wor: 14, sta: 14 }),
+    mk3('MC2', ['MC'], { pas: 15, vis: 14, tec: 14 }),
+    mk3('AMC', ['AMC'], { pas: 15, vis: 15, tec: 14, otb: 14 }),
+    mk3('ST', ['ST'], { fin: 15, otb: 14, pac: 14, acc: 14 })
+  ];
+  const roleWith = (traits) => {
+    const squad3 = rest.concat([
+      mk3('그냥윙', ['AML'], { cro: 13, dri: 13, pac: 13, acc: 13 }),
+      mk3('윙어', ['AMR'], { cro: 14, dri: 15, tec: 14, pac: 15, acc: 15, otb: 14, fin: 13 }, traits)
+    ]);
+    const r = E.generate({
+      players: squad3, opponent: { formationId: '442', traits: [] },
+      context: { venue: 'home', odds: 'even', goal: 'win' }, allowedFormations: ['4231']
+    });
+    const l = r.xi.lineup.find((x) => x.player && x.player.name === '윙어');
+    return l ? l.role.id : null;
+  };
+  const plain = roleWith([]);
+  assert.equal(plain, 'w', `특성 없이 윙어가 아니다: ${plain}`);
+  assert.equal(roleWith(['cuts-inside']), 'iw',
+    '「안쪽으로 파고들기」를 켰는데 여전히 정통 윙어다');
+  assert.equal(roleWith(['hugs-line']), 'w',
+    '「측면 라인 붙기」를 켰는데 안쪽 역할로 갔다');
+
+  /*
+   * 개인 지시에서 특성이 하는 일 두 가지.
+   *  - 특성이 이미 하는 지시는 뺀다(중복해서 켤 이유가 없다)
+   *  - 특성과 반대인 지시는 지우지 않고 표시한다. 조용히 빼면 왜 그 조언이
+   *    없는지 알 수 없어 사용자가 직접 켜 버린다.
+   */
+  const instrWith = (traits) => {
+    const squad3 = rest.concat([
+      mk3('그냥윙', ['ML'], { cro: 13, dri: 13 }),
+      mk3('윙어', ['MR'], { cro: 8, dri: 16, tec: 14, pac: 15, acc: 15 }, traits)
+    ]);
+    const r = E.generate({
+      players: squad3, opponent: { formationId: '442', traits: [] },
+      context: { venue: 'home', odds: 'even', goal: 'win' }, allowedFormations: ['442']
+    });
+    const g = r.individual.find((x) => x.player && x.player.name === '윙어');
+    return { items: g ? g.items : [], notes: r.individual.traitNotes || [] };
+  };
+  const noTrait = instrWith([]);
+  assert.ok(noTrait.items.some((i) => i.text === '안쪽으로 접어 들어가기'),
+    '크로스 8 · 드리블 16인데 안쪽으로 접으라는 지시가 없다');
+
+  const fighting = instrWith(['hugs-line']);
+  const blocked = fighting.items.find((i) => i.text === '안쪽으로 접어 들어가기');
+  assert.ok(blocked, '특성과 부딪히는 지시를 조용히 지웠다 — 왜 없는지 알 수 없게 된다');
+  assert.equal(blocked.blockedBy, '측면 라인 붙기');
+  assert.ok(/지시만으로는 바뀌지 않습니다/.test(blocked.why),
+    `특성이 이긴다는 설명이 없다: ${blocked.why}`);
+
+  const shooter = instrWith(['shoots-distance']);
+  assert.ok(shooter.items.some((i) => i.trait && /먼 거리/.test(i.text)),
+    '특성 경고가 개인 지시에 안 붙었다');
+
+  /*
+   * 특성이 이미 하고 있는 지시는 빼고, 왜 뺐는지 남긴다.
+   * 상대에 타깃형 공격수가 있으면 제공권 좋은 센터백에게 「강하게 밀착 마크」가
+   * 붙는데, 「상대를 밀착 마크」 특성이 있으면 그건 이미 하고 있는 행동이다.
+   */
+  const markWith = (traits) => {
+    const squad4 = [
+      mk3('GK', ['GK'], { ref: 14, han: 13, cmd: 13, ono: 13, aer: 13 }),
+      mk3('DR', ['DR'], { tck: 13, mar: 13 }),
+      mk3('DC1', ['DC'], { mar: 16, tck: 15, hea: 15, jum: 16 }, traits),
+      mk3('DC2', ['DC'], { mar: 14, tck: 14, hea: 12, jum: 11 }),
+      mk3('DL', ['DL'], { tck: 13, mar: 13 }),
+      mk3('MC1', ['MC'], { pas: 14, tck: 13 }), mk3('MC2', ['MC'], { pas: 15, vis: 14 }),
+      mk3('MC3', ['MC'], { pas: 14, wor: 14 }),
+      mk3('AMR2', ['AMR'], { cro: 14, dri: 14 }), mk3('AML2', ['AML'], { cro: 13, dri: 14 }),
+      mk3('ST2', ['ST'], { fin: 15, otb: 14 })
+    ];
+    const r = E.generate({
+      players: squad4, opponent: { formationId: '442', traits: ['target-man'] },
+      context: { venue: 'home', odds: 'even', goal: 'win' }, allowedFormations: ['433']
+    });
+    const g = r.individual.find((x) => x.player && x.player.name === 'DC1');
+    return { items: g ? g.items.map((i) => i.text) : [], notes: r.individual.traitNotes || [] };
+  };
+  const plainMark = markWith([]);
+  assert.ok(plainMark.items.includes('강하게 밀착 마크'),
+    `제공권 좋은 센터백에게 밀착 마크 지시가 없다: ${plainMark.items.join(', ')}`);
+
+  const already = markWith(['tight-marking']);
+  assert.ok(!already.items.includes('강하게 밀착 마크'),
+    '특성으로 이미 하고 있는 지시를 또 켜라고 한다');
+  assert.ok(already.notes.some((n) => /상대를 밀착 마크/.test(n.text)),
+    '지시를 뺐으면서 왜 뺐는지 남기지 않았다 — 사용자는 빠진 줄도 모른다');
+
+  // 특성이 없으면 아무것도 바뀌면 안 된다 (기존 사용자에게 영향이 없어야 한다)
+  assert.equal(E.traitAdjust({ traits: [] }, RD.ROLES[0]).factor, 1);
+  assert.equal(E.traitAdjust({}, RD.ROLES[0]).factor, 1);
+  assert.equal(E.traitAdjust({ traits: ['없는특성'] }, RD.ROLES[0]).factor, 1);
+}
+
+// ── 훈련 제안 ─────────────────────────────────────────────────────────────
+/*
+ * "이 자리에 사람이 없다"의 답이 늘 영입은 아니다. FM에서 더 싼 해법은
+ * 이미 있는 선수에게 옆자리를 가르치는 것이다.
+ *
+ * 처음 만들었을 때 골키퍼에게 왼쪽 수비를 배우라고 했다 — 친숙도 0.05로
+ * 나누니 이득이 폭발했기 때문이다. 그래서 옆자리만 제안하도록 막았다.
+ */
+{
+  const mk4 = (n, pos, age, over) => {
+    const a = {};
+    for (const id of RD.ATTR_ORDER) a[id] = 11;
+    Object.assign(a, over || {});
+    return { id: n, name: n, positions: pos, foot: 'R', age, attrs: a };
+  };
+  const thin = [
+    mk4('골키퍼', ['GK'], 27, { ref: 15, han: 14, cmd: 13, ono: 14, aer: 13 }),
+    mk4('오백', ['DR'], 24), mk4('센백A', ['DC'], 29), mk4('센백B', ['DC'], 31), mk4('왼백', ['DL'], 23),
+    mk4('중미A', ['MC'], 21, { pas: 15, vis: 14, tck: 13, pos: 13, wor: 14, sta: 15 }),
+    mk4('중미B', ['MC'], 26, { pas: 14, tck: 15, pos: 15, mar: 14, wor: 15, sta: 15 }),
+    mk4('중미C', ['MC'], 33, { pas: 16, vis: 15, tec: 15, cmp: 14 }),
+    mk4('윙R', ['AMR'], 22, { cro: 14, dri: 15, pac: 15, acc: 15 }),
+    mk4('윙L', ['AML'], 25, { cro: 13, dri: 15, pac: 16, acc: 15 }),
+    mk4('공격수', ['ST'], 28, { fin: 15, otb: 14, pac: 14, acc: 14 }),
+    mk4('백업GK', ['GK'], 30, { ref: 12, han: 12 }),
+    mk4('백업센백', ['DC'], 20, { mar: 13, tck: 13, hea: 13, jum: 13 }),
+    mk4('백업윙', ['AML', 'AMR'], 19, { dri: 14, pac: 15, acc: 14 })
+  ];
+  const tp = E.trainingPlan({ players: thin, standing: 'mid' });
+  assert.ok(tp, '훈련 제안이 나오지 않았다');
+
+  for (const t of tp.position) {
+    const p = thin.find((x) => x.name === t.name);
+    const isGk = p.positions.every((x) => x === 'GK');
+    assert.ok(isGk === (t.pos === 'GK'),
+      `골키퍼와 필드를 오가는 훈련을 제안했다: ${t.name} → ${t.pos}`);
+    assert.ok(!p.positions.includes(t.pos), `이미 뛸 수 있는 자리를 배우라고 했다: ${t.name} → ${t.pos}`);
+    assert.ok(t.after > t.now, `이득이 없는데 제안했다: ${t.name} ${t.now}→${t.after}`);
+    assert.ok(t.after <= 100, `적합도가 100을 넘었다: ${t.after}`);
+    assert.ok(!/[은는이가을를]\([은는이가을를]\)/.test(t.text + t.why), `조사가 괄호로 남았다: ${t.why}`);
+  }
+  assert.ok(tp.position.length, '옆자리가 비어 있는데 훈련 제안이 하나도 없다');
+  assert.ok(tp.position.some((t) => t.band === 'young'), '어린 선수 후보가 하나도 없다');
+
+  // 나이: 30대 주전 + 뒤가 얇은 자리
+  assert.ok(tp.ageing.every((a) => a.age >= 30), '30세 미만을 노쇠 자리로 봤다');
+  const midOld = tp.ageing.find((a) => a.name === '중미C');
+  assert.ok(midOld, '33세 주전 중앙 미드필더를 못 찾았다');
+  assert.ok(midOld.successors.length, '뒤에 어린 선수가 있는데 없다고 했다');
+
+  // 나이를 모르는 스쿼드에서는 나이 이야기를 하지 않는다
+  const noAge = thin.map((p) => { const q = { ...p }; delete q.age; return q; });
+  assert.equal(E.trainingPlan({ players: noAge, standing: 'mid' }).ageing.length, 0,
+    '나이를 모르는데 2년 뒤 이야기를 했다');
+
+  // 개인 훈련 초점: 역할 요구치를 못 넘긴 항목이 먼저 온다
+  const slow = thin.map((p) => (p.name === '공격수'
+    ? { ...p, attrs: { ...p.attrs, pac: 6, acc: 6, fin: 16 } } : p));
+  const tp2 = E.trainingPlan({ players: slow, standing: 'mid' });
+  if (tp2.focus.some((f) => f.kind === 'req')) {
+    assert.equal(tp2.focus[0].kind, 'req', '역할 전제가 무너진 항목이 맨 위가 아니다');
+  }
+  for (const f of tp2.focus) {
+    assert.ok(RD.ATTRS[f.attr], `알 수 없는 능력치 ${f.attr}`);
+    if (f.want != null) assert.ok(f.have < f.want, '이미 넘긴 값을 훈련하라고 했다');
+    assert.ok(!/[은는이가을를]\([은는이가을를]\)/.test(f.why), `조사가 괄호로 남았다: ${f.why}`);
   }
 }
 
