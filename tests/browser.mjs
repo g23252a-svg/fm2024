@@ -96,6 +96,30 @@ async function importSquad(page) {
   await page.waitForTimeout(1600);
 }
 
+/*
+ * FM 스쿼드 내보내기에는 포지션 열이 없을 수 있습니다. 전술을 짜는 검사에서는
+ * 포지션이 있어야 하므로 저장본에 직접 넣습니다 — 이건 가져오기 검사가 아닙니다.
+ */
+async function withPositions(page) {
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    const map = {
+      'Guglielmo Vicario': ['GK'], 'Brandon Austin': ['GK'],
+      'Pedro Porro': ['DR', 'WBR'], 'Destiny Udogie': ['DL', 'WBL'],
+      'Micky van de Ven': ['DC'], 'Cristian Romero': ['DC'], 'Kevin Danso': ['DC'],
+      'Ben Davies': ['DC', 'DL'], 'Archie Gray': ['DC', 'DM'], 'Yves Bissouma': ['DM', 'MC'],
+      'Rodrigo Bentancur': ['MC'], 'Pape Matar Sarr': ['MC'], 'Lucas Bergvall': ['MC'],
+      'James Maddison': ['AMC'], 'Dejan Kulusevski': ['AMR', 'MC'], '손흥민': ['AML', 'ST'],
+      'Brennan Johnson': ['AMR'], 'Wilson Odobert': ['AML'], 'Dominic Solanke': ['ST'],
+      'Richarlison': ['ST'], 'Bryan Gil': ['AML']
+    };
+    d.players.forEach((p) => { if (map[p.name]) p.positions = map[p.name]; p.age = p.age || 24; });
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+}
+
 async function test(name, fn) {
   try {
     await fn();
@@ -420,23 +444,7 @@ await test('슬롯을 저장하면 맞춤 전술이 그 안에서만 고른다',
   page.on('dialog', (d) => d.accept());
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await importSquad(page);
-  await page.evaluate(() => {
-    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
-    const d = JSON.parse(localStorage.getItem(k));
-    const map = {
-      'Guglielmo Vicario': ['GK'], 'Brandon Austin': ['GK'],
-      'Pedro Porro': ['DR', 'WBR'], 'Destiny Udogie': ['DL', 'WBL'],
-      'Micky van de Ven': ['DC'], 'Cristian Romero': ['DC'], 'Kevin Danso': ['DC'],
-      'Ben Davies': ['DC', 'DL'], 'Archie Gray': ['DC', 'DM'], 'Yves Bissouma': ['DM', 'MC'],
-      'Rodrigo Bentancur': ['MC'], 'Pape Matar Sarr': ['MC'], 'Lucas Bergvall': ['MC'],
-      'James Maddison': ['AMC'], 'Dejan Kulusevski': ['AMR', 'MC'], '손흥민': ['AML', 'ST'],
-      'Brennan Johnson': ['AMR'], 'Wilson Odobert': ['AML'], 'Dominic Solanke': ['ST'],
-      'Richarlison': ['ST'], 'Bryan Gil': ['AML']
-    };
-    d.players.forEach((p) => { if (map[p.name]) p.positions = map[p.name]; p.age = p.age || 24; });
-    localStorage.setItem(k, JSON.stringify(d));
-  });
-  await page.reload({ waitUntil: 'networkidle' });
+  await withPositions(page);
 
   await tab(page, '기본 전술');
   await page.waitForTimeout(1500);
@@ -485,7 +493,74 @@ await test('슬롯을 저장하면 맞춤 전술이 그 안에서만 고른다',
   await page.close();
 });
 
-// ── 9. 좁은 화면에서 가로로 넘치지 않는다 ─────────────────────────────────
+// ── 9. 슬롯 친숙도 ────────────────────────────────────────────────────────
+/*
+ * FM은 저장된 전술마다 친숙도를 따로 매긴다. 안 익은 슬롯을 종이 위 점수만 보고
+ * 꺼내면 그 점수가 안 나오므로, 화면에서 넣은 친숙도가 실제로 추천을 바꿔야 한다.
+ * 그리고 왜 점수 1위를 안 골랐는지 화면에 나와야 한다 — 숫자와 추천이 어긋나
+ * 보이면 도구를 못 믿는다.
+ */
+await test('슬롯 친숙도를 넣으면 안 익은 전술 대신 몸에 밴 전술을 고른다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  await withPositions(page);
+
+  // 뼈대가 서로 다른 슬롯 둘을 직접 심는다 — 화면으로 두 번 저장하는 것보다 확실하다
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    d.tactics = [
+      { id: 'ta', name: 'A · 기본', formationId: '4231' },
+      { id: 'tb', name: 'B · 수비', formationId: '352' }
+    ];
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+
+  await tab(page, '맞춤 전술');
+  await page.waitForTimeout(1500);
+  const firstPick = await page.locator('#tab-result .card h2').first().innerText();
+  const chosen = /A · 기본/.test(firstPick) ? 'A' : 'B';
+
+  // 지금 고른 쪽을 「어색함」으로, 반대쪽을 「유동적」으로 만든다
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(1200);
+  const slot = page.locator('#tab-base .card').filter({ hasText: '전술 슬롯' }).first();
+  const rows = slot.locator('.rep');
+  assert.equal(await rows.count(), 2, '슬롯 두 개가 안 보인다');
+  const idxAwkward = chosen === 'A' ? 0 : 1;
+  await rows.nth(idxAwkward).locator('.chip', { hasText: '어색함' }).click();
+  await page.waitForTimeout(700);
+  await rows.nth(1 - idxAwkward).locator('.chip', { hasText: '유동적' }).click();
+  await page.waitForTimeout(900);
+
+  const stored2 = await stored(page);
+  assert.equal(stored2.tactics.filter((t) => t.familiarity).length, 2, '친숙도가 저장되지 않았다');
+
+  // 슬롯 구성 점검이 덜 익은 슬롯을 짚어야 한다
+  const baseText = await page.locator('#tab-base').innerText();
+  assert.ok(/슬롯 구성 점검/.test(baseText), '슬롯 구성 점검이 안 나온다');
+  assert.ok(/어색함/.test(baseText), '덜 익은 슬롯을 안 짚었다');
+  assert.ok(/뼈대가 전부 다릅니다|뼈대/.test(baseText), '뼈대 얘기가 없다');
+
+  // 추천이 반대쪽으로 넘어가고, 왜 넘어갔는지 화면에 있어야 한다
+  await tab(page, '맞춤 전술');
+  await page.waitForTimeout(1600);
+  const after = await page.locator('#tab-result').innerText();
+  const nowPick = await page.locator('#tab-result .card h2').first().innerText();
+  assert.ok(!new RegExp(chosen === 'A' ? 'A · 기본' : 'B · 수비').test(nowPick),
+    `어색한 슬롯을 그대로 골랐다: ${nowPick}`);
+  assert.ok(/형태만 보면/.test(after), '왜 점수 1위를 안 골랐는지 설명이 없다');
+  assert.ok(/어색함/.test(after), '친숙도가 화면에 안 보인다');
+  assert.ok(/친숙도 −\d+/.test(after), `깎인 점수가 안 보인다: ${after.slice(0, 400)}`);
+  assert.ok(!/NaN|undefined|\[object/.test(after), '화면에 이상한 값이 있다');
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 10. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });

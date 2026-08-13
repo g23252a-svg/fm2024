@@ -260,9 +260,12 @@ for (const [label, opts] of CASES) {
      * 나가는 순간 게임에서 전술 친숙도가 리셋되므로 따라 할 수 없는 조언이 됩니다.
      */
     try {
-      const slots = [pick(FD.FORMATIONS).id, pick(FD.FORMATIONS).id]
+      // 친숙도는 사람이 손으로 넣는 값이라 미입력·일부 입력·전부 입력이 다 섞입니다.
+      const famPool = [undefined, undefined, ...TD.FAMILIARITY.map((f) => f.id)];
+      const slots = [pick(FD.FORMATIONS).id, pick(FD.FORMATIONS).id, pick(FD.FORMATIONS).id]
+        .slice(0, 2 + (rnd() < 0.4 ? 1 : 0))
         .filter((v, i, a) => a.indexOf(v) === i)
-        .map((id, i) => ({ id: 't' + i, name: '슬롯' + i, formationId: id }));
+        .map((id, i) => ({ id: 't' + i, name: '슬롯' + i, formationId: id, familiarity: pick(famPool) }));
       const pk = E.pickTactic({
         players: squad, tactics: slots,
         opponent: { formationId: pick(FD.FORMATIONS).id, traits: [] },
@@ -273,9 +276,25 @@ for (const [label, opts] of CASES) {
         if (!ids.includes(pk.result.xi.formation.id)) {
           fail(`슬롯/${label}`, `저장하지 않은 포메이션을 골랐다: ${pk.result.xi.formation.id}`);
         }
+        // 화면에는 슬롯 이름이 뜨는데 선발이 다른 포메이션이면 그대로 따라 할 수 없습니다.
+        if (pk.best.tactic.formationId !== pk.result.xi.formation.id) {
+          fail(`슬롯/${label}`, `고른 슬롯(${pk.best.tactic.formationId})과 짠 포메이션(${pk.result.xi.formation.id})이 다르다`);
+        }
         if (pk.ranking.length !== slots.length) fail(`슬롯/${label}`, '슬롯 수가 안 맞는다');
+        // 친숙도를 안 넣은 슬롯은 절대 깎이면 안 됩니다 — 모르는 값을 벌주는 셈이 됩니다.
+        for (const r of pk.ranking) {
+          if (!r.tactic.familiarity && r.famPenalty !== 0) {
+            fail(`슬롯/${label}`, `친숙도를 안 넣은 슬롯이 깎였다: ${r.tactic.name}`);
+          }
+          if (r.total !== null && r.effective > r.total) {
+            fail(`슬롯/${label}`, `친숙도 보정이 점수를 올렸다: ${r.total} → ${r.effective}`);
+          }
+        }
         checkXI(`슬롯/${label}`, pk.result.xi);
         checkStrings(`슬롯/${label}`, pk.note);
+        checkStrings(`슬롯/${label}`, pk.trainNote);
+        checkStrings(`슬롯/${label}`, pk.audit.findings.map((f) => f.text + ' ' + f.fix));
+        checkStrings(`슬롯/${label}`, pk.audit.split);
         runs++;
       }
     } catch (e) { fail(`슬롯/${label}`, 'throw ' + e.message); }

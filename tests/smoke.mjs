@@ -2020,6 +2020,171 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(E.pickTactic({ players: squad }), null);
 }
 
+// ── 전술 친숙도 ───────────────────────────────────────────────────────────
+/*
+ * FM은 저장된 전술마다 친숙도를 따로 매긴다. 그래서 이미 익힌 슬롯끼리
+ * 갈아타는 것은 공짜지만, 안 익은 슬롯을 종이 위 점수만 보고 꺼내면 그 점수가
+ * 안 나온다. 친숙도를 넣었을 때 그게 실제로 선택을 바꾸는지 확인한다.
+ */
+{
+  // 데이터 정합성 — 단계가 순서대로여야 감점도 순서대로 먹힌다
+  assert.ok(TD.FAMILIARITY.length >= 3, '친숙도 단계가 너무 적다');
+  let prevPen = Infinity;
+  for (const f of TD.FAMILIARITY) {
+    assert.ok(f.id && f.ko && f.en, `친숙도 ${f.id}에 이름이 빠졌다`);
+    assert.ok(typeof f.penalty === 'number' && f.penalty >= 0, `${f.id}의 감점이 이상하다`);
+    assert.ok(f.penalty <= prevPen, '친숙도가 올라가는데 감점이 줄지 않는다');
+    prevPen = f.penalty;
+    assert.ok(f.note && f.note.length > 5, `${f.id}에 설명이 없다`);
+  }
+  assert.equal(TD.FAMILIARITY[TD.FAMILIARITY.length - 1].penalty, 0, '완전히 익은 단계에도 감점이 있다');
+  // 안 익은 전술의 감점은 '새 포메이션을 만들 값어치'보다 커야 한다.
+  // 그렇지 않으면 "안 익었으니 하나 더 만들자"는 거꾸로 된 조언이 나온다.
+  assert.ok(TD.FAMILIARITY[0].penalty > 12, '어색한 전술의 감점이 새 전술을 만드는 기준보다 작다');
+
+  const two = (famA, famB) => [
+    { id: 'a', name: 'A · 기본', formationId: '4231', familiarity: famA },
+    { id: 'b', name: 'B · 수비', formationId: '4141', familiarity: famB }
+  ];
+  const run = (tactics) => E.pickTactic({
+    players: squad, tactics,
+    opponent: { formationId: '442', traits: [] },
+    context: { venue: 'home', odds: 'even', goal: 'win' }
+  });
+
+  // 안 넣으면 예전과 똑같아야 한다
+  const blank = run(two(undefined, undefined));
+  assert.ok(blank.ranking.every((r) => r.famPenalty === 0 && r.effective === r.total),
+    '친숙도를 안 넣었는데 점수가 깎였다');
+  assert.equal(blank.famOverride, null);
+  assert.equal(blank.trainNote, '');
+
+  // 점수 1위를 어색함으로 만들면 2위가 올라와야 한다
+  const top = blank.ranking[0], second = blank.ranking[1];
+  const flipped = run(two(
+    top.tactic.id === 'a' ? 'awkward' : 'fluid',
+    top.tactic.id === 'b' ? 'awkward' : 'fluid'
+  ));
+  assert.equal(flipped.best.tactic.id, second.tactic.id, '어색한 전술을 그대로 골랐다');
+  assert.equal(flipped.rawBest.tactic.id, top.tactic.id, '종이 위 1위가 바뀌었다');
+  assert.ok(flipped.famOverride, '왜 점수 1위를 안 골랐는지 말하지 않았다');
+  assert.ok(/어색함/.test(flipped.note), `바꾼 이유가 안내문에 없다: ${flipped.note}`);
+  // 화면에 나온 슬롯 이름과 실제 선발이 어긋나면 안 된다
+  assert.equal(flipped.result.xi.formation.id, flipped.best.tactic.formationId,
+    '고른 슬롯과 실제로 짠 포메이션이 다르다');
+
+  // 둘 다 완전히 익었으면 감점이 없고 순서도 그대로여야 한다
+  const bothFluid = run(two('fluid', 'fluid'));
+  assert.equal(bothFluid.best.tactic.id, top.tactic.id, '둘 다 익었는데 순서가 바뀌었다');
+  assert.equal(bothFluid.famOverride, null);
+
+  // 고른 슬롯이 덜 익었으면 훈련하라고 해야 한다 — 조용히 추천하면 안 된다
+  const one = E.pickTactic({
+    players: squad,
+    tactics: [{ id: 'x', name: 'X · 기본', formationId: '4231', familiarity: 'awkward' }],
+    opponent: { formationId: '442', traits: [] },
+    context: { venue: 'home', odds: 'even', goal: 'win' }
+  });
+  assert.ok(/훈련|세션|프리시즌/.test(one.trainNote), `덜 익은 슬롯인데 훈련 얘기가 없다: ${one.trainNote}`);
+
+  // 모르는 값은 무시한다 (낡은 저장본이 있을 수 있다)
+  const bogusFam = run(two('없는단계', undefined));
+  assert.ok(bogusFam.ranking.every((r) => r.famPenalty === 0), '알 수 없는 친숙도로 점수를 깎았다');
+
+  for (const r of [blank, flipped, bothFluid, one]) {
+    assert.ok(!/NaN|undefined|\[object |[은는이가을를와과]\([은는이가을를와과]\)/.test(r.note + r.trainNote),
+      `안내문에 이상한 값이 있다: ${r.note} / ${r.trainNote}`);
+  }
+}
+
+// ── 슬롯 구성 진단 ────────────────────────────────────────────────────────
+/*
+ * 슬롯끼리 갈아타는 것은 친숙도를 안 깎지만, 뼈대가 다 다른 슬롯 셋은 훈련이
+ * 셋으로 쪼개져 어느 것도 안 올라간다. 반대로 셋 다 성격이 비슷하면 훈련은
+ * 싸지만 강팀 원정에서 꺼낼 게 없다. 그 둘을 같이 봐야 한다.
+ */
+{
+  const nm = (ids) => ids.map((id, i) => ({ id: 't' + i, name: String.fromCharCode(65 + i), formationId: id }));
+  const kinds = (a) => new Set(a.findings.map((f) => f.kind));
+
+  // 하나도 없으면 그것부터 말해야 한다
+  const none = E.slotAudit([]);
+  assert.equal(none.count, 0);
+  assert.ok(kinds(none).has('none'), '슬롯이 없는데 아무 말도 안 한다');
+  assert.equal(none.findings[0].level, 'high');
+
+  // 뼈대가 전부 다른 셋 — 훈련이 쪼개진다
+  const spread = E.slotAudit(nm(['4231', '352', '442']));
+  assert.ok(kinds(spread).has('all-distinct'), '뼈대가 다 다른데 경고가 없다');
+  const warn = spread.findings.find((f) => f.kind === 'all-distinct');
+  assert.equal(warn.level, 'high');
+  assert.ok(warn.fix && warn.fix.length > 10, '무엇을 하면 되는지가 없다');
+
+  // 같은 뼈대끼리는 훈련이 싸다 — 이건 칭찬해야지 경고하면 안 된다
+  const tight = E.slotAudit(nm(['4231', '4141']));
+  assert.ok(kinds(tight).has('one-shape'), '같은 뼈대인데 아무 말도 안 한다');
+  assert.equal(tight.findings.find((f) => f.kind === 'one-shape').level, 'good');
+  assert.ok(!kinds(tight).has('all-distinct'));
+
+  // 둘인데 뼈대가 다르면 훈련이 반으로 갈린다 — 아무 말도 안 하면 안 된다
+  const twoWays = E.slotAudit(nm(['4231', '352']));
+  assert.ok(kinds(twoWays).has('split-shape'), '뼈대가 갈렸는데 아무 말도 안 한다');
+  assert.ok(/뼈대/.test(twoWays.findings.find((f) => f.kind === 'split-shape').text));
+
+  // 셋 중 둘이 같은 뼈대 — 이게 권장 구성이므로 경고가 아니라 확인이어야 한다
+  const shared = E.slotAudit(nm(['4231', '4141', '352']));
+  assert.ok(kinds(shared).has('shared-shape'), '셋 중 둘이 같은 뼈대인데 아무 말도 안 한다');
+  assert.equal(shared.findings.find((f) => f.kind === 'shared-shape').level, 'good');
+  assert.ok(!kinds(shared).has('all-distinct'));
+
+  // 슬롯이 하나든 셋이든 뼈대에 대해서는 정확히 한 마디만 한다
+  for (const set of [['433'], ['4231', '4141'], ['4231', '352'], ['4231', '4141', '352'],
+                     ['4231', '352', '442'], ['442', '442']]) {
+    const shapeSaid = E.slotAudit(nm(set)).findings
+      .filter((f) => ['single', 'one-shape', 'split-shape', 'shared-shape', 'all-distinct'].includes(f.kind));
+    assert.equal(shapeSaid.length, 1,
+      `${set.join('+')}: 뼈대 얘기가 ${shapeSaid.length}번 나왔다 (${shapeSaid.map((f) => f.kind)})`);
+  }
+
+  // 대응 폭 — 셋 다 같은 성격이면 빠진 자리를 짚어야 한다
+  const flat = E.slotAudit(nm(['442', '442d', '424']));
+  assert.ok(flat.missing.some((r) => r.id === 'low'), '수비적 형태가 없는데 안 짚었다');
+  assert.ok(kinds(flat).has('gap-low'));
+  // 반대로 셋을 다 덮으면 빠진 자리가 없어야 한다
+  const wide = E.slotAudit(nm(['4141', '433dm', '442']));
+  assert.equal(wide.missing.length, 0, `다 덮었는데 빠졌다고 한다: ${wide.missing.map((r) => r.ko)}`);
+
+  // 같은 포메이션 두 개는 이 도구에서 의미가 없다는 것을 말해야 한다
+  const dup = E.slotAudit(nm(['442', '442']));
+  assert.ok(kinds(dup).has('duplicate'), '같은 포메이션을 두 번 저장했는데 아무 말도 안 한다');
+
+  // 덜 익은 슬롯은 높은 등급으로 짚는다
+  const raw = E.slotAudit([
+    { id: 'a', name: 'A', formationId: '4231', familiarity: 'fluid' },
+    { id: 'b', name: 'B', formationId: '4141', familiarity: 'awkward' }
+  ]);
+  const un = raw.findings.find((f) => f.kind === 'untrained');
+  assert.ok(un, '어색한 슬롯을 안 짚었다');
+  assert.equal(un.level, 'high');
+  assert.ok(/B/.test(un.text), '어느 슬롯인지 안 말했다');
+  assert.ok(!kinds(raw).has('fam-unknown'), '다 넣었는데 넣으라고 한다');
+  assert.ok(kinds(E.slotAudit(nm(['4231', '4141']))).has('fam-unknown'), '친숙도를 안 넣었는데 안내가 없다');
+
+  // 없는 포메이션은 조용히 거른다
+  assert.equal(E.slotAudit(nm(['4231', '없는포메이션'])).count, 1);
+  assert.equal(E.slotAudit(null).count, 0);
+
+  // 문장 검사 — 어느 경우에도 조사나 NaN이 새면 안 된다
+  for (const a of [none, spread, tight, flat, wide, dup, raw]) {
+    for (const f of a.findings) {
+      assert.ok(f.text && f.text.length > 5, `${f.kind}에 설명이 없다`);
+      assert.ok(!/NaN|undefined|\[object |[은는이가을를와과]\([은는이가을를와과]\)/.test(f.text + f.fix),
+        `${f.kind}에 이상한 값이 있다: ${f.text} / ${f.fix}`);
+    }
+    assert.ok(!/NaN|undefined/.test(a.split), `훈련 분배 설명이 이상하다: ${a.split}`);
+  }
+}
+
 // ── 세트피스 ──────────────────────────────────────────────────────────────
 {
   // 데이터 정합성 — 알 수 없는 능력치를 쓰면 그 자리는 영영 비어 있는다

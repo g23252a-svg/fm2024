@@ -567,6 +567,67 @@
     { id: 'weaker', ko: '우리보다 약함' }
   ];
 
+  /*
+   * 전술 친숙도 (Tactical Familiarity).
+   *
+   * FM은 저장된 전술 하나하나에 친숙도를 따로 매깁니다. 그래서 이미 익혀 둔
+   * 슬롯끼리 경기마다 갈아타는 것은 공짜입니다 — 친숙도가 깎이는 것은 포메이션을
+   * 새로 만들거나 저장해 둔 전술의 뼈대를 뜯어고칠 때입니다.
+   *
+   * 대신 슬롯을 늘리면 전술 훈련 시간이 그만큼 쪼개집니다. 종이 위 궁합 점수만
+   * 보고 고르면 "형태는 잘 맞는데 선수들이 아직 못 하는 전술"을 꺼내게 됩니다.
+   * penalty가 그 보정입니다.
+   *
+   * penalty는 게임 내부 수치가 아니라 이 도구의 가중치입니다. 기준은
+   * NEW_TACTIC_GAP(12점) — 포메이션을 새로 익힐 값어치가 있다고 보는 격차입니다.
+   * 어색함(14)을 그보다 크게 둔 것은 "안 익힌 전술을 쓰느니 형태가 조금 덜
+   * 맞아도 몸에 밴 것을 쓴다"는 뜻입니다.
+   */
+  var FAMILIARITY = [
+    {
+      id: 'awkward', ko: '어색함', en: 'Awkward', penalty: 14, pct: 20,
+      note: '선수들이 아직 이 형태를 모릅니다. 실전에 꺼내면 점수표대로 안 나옵니다.',
+      fix: '전술 훈련 세션(경기 연습 · 공격 조직 · 수비 조직)을 주간 일정에 넣고, 프리시즌이나 컵 경기에서 먼저 돌려 보세요.'
+    },
+    {
+      id: 'competent', ko: '능숙함', en: 'Competent', penalty: 6, pct: 45,
+      note: '기본은 돌아가지만 아직 몸에 붙지 않았습니다. 큰 경기에 꺼내기는 이릅니다.',
+      fix: '주간 전술 세션을 한 칸 더 붙이면 몇 주 안에 올라갑니다.'
+    },
+    {
+      id: 'accomplished', ko: '숙달됨', en: 'Accomplished', penalty: 2, pct: 70,
+      note: '실전에 써도 되는 상태입니다. 아직 최고는 아닙니다.',
+      fix: '이대로 경기를 치르면 자연히 올라갑니다.'
+    },
+    {
+      id: 'fluid', ko: '유동적', en: 'Fluid', penalty: 0, pct: 100,
+      note: '완전히 익은 전술입니다. 언제 꺼내도 제 점수가 나옵니다.',
+      fix: ''
+    }
+  ];
+
+  /*
+   * 슬롯 세 개가 채워야 할 자리.
+   *
+   * 슬롯을 세 개 다 채웠는데 셋 다 "중원 장악"이면, 강팀 원정에서 꺼낼 게
+   * 없습니다. 반대로 셋 다 성격이 달라도 문제입니다 — 훈련이 셋으로 쪼개집니다.
+   * 이 둘을 같이 봐야 슬롯 구성을 판단할 수 있습니다.
+   */
+  var SLOT_ROLES = [
+    {
+      id: 'low', ko: '내려앉아 버티기', tags: ['defensive-shape'],
+      why: '강팀 원정, 그리고 리드를 지켜야 하는 마지막 20분에 꺼낼 형태입니다.'
+    },
+    {
+      id: 'control', ko: '중원 장악', tags: ['overload-centre', 'dm-anchored'],
+      why: '비슷한 상대와 중앙에서 수적 싸움을 벌일 때 쓰는 형태입니다.'
+    },
+    {
+      id: 'chase', ko: '몰아붙이기', tags: ['attacking', 'two-striker'],
+      why: '내려앉은 약체를 상대하거나, 지고 있어서 앞에 사람을 더 둬야 할 때 쓰는 형태입니다.'
+    }
+  ];
+
   // FM 경기 통계 화면의 항목. 가운데가 항목명, 좌우가 두 팀입니다.
   var MATCH_STATS = [
     { id: 'shots', ko: '슈팅', aliases: ['슈팅 수', '슈팅', 'Shots'] },
@@ -1112,6 +1173,8 @@
     MATCH_PHASES: MATCH_PHASES,
     MATCH_FLAGS: MATCH_FLAGS,
     OPP_LEVELS: OPP_LEVELS,
+    FAMILIARITY: FAMILIARITY,
+    SLOT_ROLES: SLOT_ROLES,
     MATCH_STATS: MATCH_STATS,
     INMATCH_RULES: INMATCH_RULES,
     SCENARIOS: SCENARIOS

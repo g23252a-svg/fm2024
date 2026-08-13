@@ -1898,17 +1898,39 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         ]),
         h('div', { class: 'small', style: 'color:var(--dim)', text: pick.note })
       ]);
+      // 고른 슬롯이 아직 덜 익었으면 그 사실이 추천보다 중요합니다.
+      if (pick.trainNote) {
+        pc.appendChild(h('div', { class: 'warn', style: 'margin-top:9px' }, [
+          h('span', { class: 'ic', text: '!' }),
+          h('span', { text: pick.trainNote })
+        ]));
+      }
       if (pick.ranking.length > 1) {
         var rk = h('div', { class: 'statrows', style: 'margin-top:9px' });
         pick.ranking.forEach(function (r, i) {
+          /*
+           * 점수 두 개를 같이 보여 줍니다 — 종이 위 궁합(total)과 친숙도를 뺀
+           * 값(effective). 하나만 보이면 "왜 점수 낮은 쪽을 골랐지?"가 됩니다.
+           */
+          var moved = r.famPenalty > 0;
           rk.appendChild(h('div', { class: 'statrow' }, [
             h('b', { class: 'us', style: 'text-align:left;color:' + (i ? 'var(--dim2)' : 'var(--acc)'),
               text: r.tactic.name }),
-            h('span', { class: 'lb', style: 'text-align:left', text: r.formation.ko }),
-            h('span', { class: 'them', text: r.total === null ? '—' : String(r.total) })
+            h('span', { class: 'lb', style: 'text-align:left',
+              text: r.formation.ko + (r.fam ? ' · ' + r.fam.ko : '')
+                + (moved ? ' · 친숙도 −' + r.famPenalty : '') }),
+            h('span', { class: 'them', style: moved ? 'color:var(--warn)' : '',
+              text: r.effective === null ? '—' : String(r.effective) })
           ]));
         });
         pc.appendChild(rk);
+        if (pick.ranking.some(function (r) { return r.famPenalty > 0; })) {
+          pc.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:5px',
+            text: '점수는 친숙도를 뺀 값입니다 — 안 익은 전술은 점수표대로 안 나옵니다.' }));
+        } else if (pick.ranking.every(function (r) { return !r.fam; })) {
+          pc.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:5px',
+            text: '슬롯 친숙도를 넣으면(「기본 전술」 탭 → 전술 슬롯) 형태가 조금 덜 맞아도 몸에 밴 쪽을 고릅니다.' }));
+        }
       }
       pc.appendChild(h('div', { class: 'row', style: 'margin-top:9px' }, [
         h('button', {
@@ -1947,7 +1969,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         h('span', {}, [h('i', { style: 'background:var(--duty-a)' }), '공격 임무'])
       ]),
       h('div', { class: 'row', style: 'margin-top:12px' }, [
-        h('button', { class: 'btn', onclick: function () { copyPlan(res); } }, ['전술 텍스트로 복사']),
+        h('button', { class: 'btn', onclick: function () { copyPlan(res, pick); } }, ['전술 텍스트로 복사']),
         S.pinnedFormation
           ? h('button', { class: 'btn ghost sm', onclick: function () { S.pinnedFormation = null; save(); render(); } },
               ['포메이션 고정 해제'])
@@ -2931,7 +2953,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    *
    * 그래서 FM처럼 전술을 최대 세 개 저장해 두고, 경기마다 그중에서 고릅니다.
    */
-  var MAX_TACTICS = 3;
+  var MAX_TACTICS = E.MAX_SLOTS;   // 엔진과 한 군데서 셉니다 (FM도 세 개까지)
 
   function tacticSlotCard(res) {
     var card = h('div', { class: 'card' }, [
@@ -2945,8 +2967,32 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ])
     ]);
 
+    var audit = null;
+    try { audit = E.slotAudit(S.tactics || []); } catch (e) { audit = null; }
+    var shapeById = {};
+    if (audit) audit.slots.forEach(function (s) { shapeById[s.tactic.id] = s.shapeKo; });
+
     (S.tactics || []).forEach(function (t, i) {
       var f = FD.FORMATIONS.filter(function (x) { return x.id === t.formationId; })[0];
+      /*
+       * 친숙도는 파일로 알 수 없습니다 — FM 전술 화면의 막대를 보고 직접 넣습니다.
+       * 미입력이 기본값이어야 합니다. 모르는 값을 '유동적'으로 가정하면 아직
+       * 익지도 않은 전술을 자신 있게 추천하게 됩니다.
+       */
+      var famRow = h('div', { class: 'row', style: 'gap:6px;margin-top:6px;flex-wrap:wrap' }, [
+        h('span', { class: 'tiny muted', style: 'align-self:center', text: '친숙도' })
+      ]);
+      [{ id: '', ko: '미입력' }].concat(TD.FAMILIARITY).forEach(function (lv) {
+        famRow.appendChild(h('button', {
+          class: 'chip', 'aria-pressed': (t.familiarity || '') === lv.id ? 'true' : 'false',
+          title: lv.en ? lv.en + (lv.note ? ' — ' + lv.note : '') : 'FM 전술 화면의 친숙도 막대를 아직 안 봤을 때',
+          onclick: function () {
+            if (lv.id) t.familiarity = lv.id; else delete t.familiarity;
+            save(); render();
+          }
+        }, [lv.ko]));
+      });
+
       card.appendChild(h('div', { class: 'rep', style: 'margin-bottom:7px' }, [
         h('div', { class: 'row', style: 'gap:8px;align-items:center' }, [
           h('input', {
@@ -2963,7 +3009,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
           }, ['지우기'])
         ]),
         h('div', { class: 'tiny muted', style: 'margin-top:5px',
-          text: (f ? f.ko : t.formationId) + (t.planKo ? ' · ' + t.planKo : '') })
+          text: (f ? f.ko : t.formationId) + (t.planKo ? ' · ' + t.planKo : '')
+            + (shapeById[t.id] ? '  ·  ' + shapeById[t.id] : '') }),
+        famRow
       ]));
     });
 
@@ -2991,9 +3039,27 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         : null
     ]));
 
-    if (!(S.tactics || []).length) {
-      card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:8px',
-        text: '아직 저장한 전술이 없습니다 — 지금은 「맞춤 전술」이 매 경기 포메이션까지 새로 고릅니다. 그대로 따라 하면 전술 친숙도가 계속 리셋됩니다.' }));
+    /*
+     * 슬롯 구성 진단.
+     *
+     * 슬롯끼리 갈아타는 것 자체는 친숙도를 깎지 않습니다 — 깎이는 것은 포메이션을
+     * 새로 만들 때입니다. 대신 슬롯을 늘리면 훈련이 쪼개집니다. 그래서 "몇 개를
+     * 어떤 뼈대로 들고 다니는가"가 실제 문제이고, 여기서 그걸 말합니다.
+     */
+    if (audit && audit.findings.length) {
+      card.appendChild(h('h3', { style: 'font-size:12px;color:var(--dim);margin:14px 0 6px', text: '슬롯 구성 점검' }));
+      audit.findings.forEach(function (fd) {
+        card.appendChild(h('div', {
+          class: 'warn' + (fd.level === 'high' ? ' high' : ''),
+          style: fd.level === 'good' ? 'border-color:#2c4a35' : ''
+        }, [
+          h('span', { class: 'ic', text: fd.level === 'high' ? '!' : fd.level === 'good' ? '✓' : '·' }),
+          h('span', {}, [fd.text, fd.fix ? h('span', { class: 'fixnote', text: '→ ' + fd.fix }) : null])
+        ]));
+      });
+      if (audit.split) {
+        card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:7px', text: audit.split }));
+      }
     }
     return card;
   }
@@ -3377,6 +3443,32 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ])
     ]));
 
+    /*
+     * "상대마다 카운터 전술을 유지하면 전술 적응력이 실패하지 않나"는 이 도구를
+     * 쓰면 반드시 나오는 질문입니다. 답이 슬롯 기능의 전제이므로 여기 적어 둡니다.
+     */
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '전술 슬롯과 친숙도 — 상대마다 바꿔도 되나' }),
+      h('div', { class: 'body', style: 'font-size:13px;color:var(--dim);line-height:1.75' }, [
+        h('p', {}, [h('strong', { text: '이미 익혀 둔 슬롯끼리 갈아타는 것은 공짜입니다.' }),
+          ' FM은 저장된 전술 하나하나에 친숙도를 따로 매기므로, A를 익히고 B를 익혀 뒀다면 이번 주에 B를 쓴다고 A가 내려가지 않습니다.']),
+        h('p', {}, ['친숙도가 실제로 깎이는 경우는 둘입니다.']),
+        h('ul', {}, [
+          h('li', {}, [h('strong', { text: '슬롯 안의 형태를 뜯어고칠 때' }),
+            ' — 상대를 보고 그때그때 포메이션을 새로 짜면 그 슬롯의 친숙도가 크게 깎입니다. 슬롯 기능이 있는 이유가 이것입니다.']),
+          h('li', {}, [h('strong', { text: '훈련이 쪼개질 때' }),
+            ' — 슬롯이 셋이면 전술 훈련도 셋으로 나뉩니다. 리셋되는 게 아니라 셋 다 어중간한 채로 안 올라갑니다. 「적응력이 안 된다」고 느끼는 원인은 대개 이쪽입니다.'])
+        ]),
+        h('p', {}, [h('strong', { text: '그래서 주력 둘 + 상황용 하나가 안전선입니다.' }),
+          ' 그리고 슬롯끼리 뒷선·최전방 인원을 맞추면 훨씬 싸게 익습니다 — 전술 친숙도는 전술마다 쌓이지만 ',
+          h('strong', { text: '선수 개인의 포지션 친숙도는 선수한테 쌓이기 때문' }),
+          '입니다. 4-2-3-1과 4-1-4-1은 옆에 두기 좋고, 4-2-3-1과 3-5-2는 사실상 전술을 두 벌 익히는 일입니다.']),
+        h('p', {}, ['이 도구는 그 전제 위에서 움직입니다. 저장한 슬롯 안에서만 고르고, 저장 안 된 포메이션이 더 좋아도 ',
+          h('strong', { text: E.NEW_TACTIC_GAP + '점 차이 미만이면 갈아타지 않습니다' }),
+          '. 「기본 전술」 탭에서 슬롯마다 친숙도를 넣어 두면, 형태가 조금 덜 맞아도 몸에 밴 쪽을 고릅니다.'])
+      ])
+    ]));
+
     root.appendChild(syncCard());
 
     root.appendChild(h('div', { class: 'card' }, [
@@ -3611,10 +3703,16 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   }
 
   // ── 전술 텍스트 복사 ────────────────────────────────────────────────────
-  function copyPlan(res) {
+  function copyPlan(res, pick) {
     var L = [];
     L.push('■ FM24 전술 — ' + res.xi.formation.ko + ' / ' + res.plans.top.map(function (p) { return p.ko; }).join(' + '));
     L.push('상대: ' + (res.opponentFormation ? res.opponentFormation.ko : '모름'));
+    // 어느 슬롯을 꺼내는지가 빠지면 붙여넣은 사람이 새로 만들어야 하는 줄 압니다.
+    if (pick) {
+      L.push('전술 슬롯: ' + pick.best.tactic.name
+        + (pick.best.fam ? ' (친숙도 ' + pick.best.fam.ko + ')' : ''));
+      if (pick.trainNote) L.push('※ ' + pick.trainNote);
+    }
     L.push('');
     L.push('[선발과 역할]');
     res.xi.lineup.forEach(function (l) {

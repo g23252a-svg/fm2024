@@ -2441,6 +2441,178 @@
    * 말합니다 — 판단은 사람이 합니다.
    */
   var NEW_TACTIC_GAP = 12;   // 이 정도 벌어지면 새로 만드는 것을 검토할 만합니다
+  var MAX_SLOTS = 3;         // FM도 세 개까지입니다
+  var KO_COUNT = { 1: '하나', 2: '둘', 3: '셋' };
+
+  var FAM_BY_ID = {};
+  (TD.FAMILIARITY || []).forEach(function (f) { FAM_BY_ID[f.id] = f; });
+
+  /*
+   * 슬롯의 '뼈대'.
+   *
+   * 전술 친숙도는 전술마다 따로 쌓이지만, 선수 개인의 포지션 친숙도는 선수한테
+   * 쌓입니다. 그래서 뒷선 인원과 최전방 인원이 같은 두 슬롯은 선수들이 서는
+   * 자리가 대체로 같고, 배우는 비용이 훨씬 쌉니다. 4-2-3-1과 4-4-1-1은 옆
+   * 슬롯으로 둘 만하지만 4-2-3-1과 3-5-2는 사실상 전술을 두 벌 익히는 일입니다.
+   */
+  function shapeOf(f) {
+    var back = 0, st = 0;
+    f.slots.forEach(function (s) {
+      if (s.pos === 'DC' || s.pos === 'DL' || s.pos === 'DR' || s.pos === 'WBL' || s.pos === 'WBR') back++;
+      if (s.pos === 'ST') st++;
+    });
+    return {
+      key: back + '-' + st,
+      ko: (back >= 5 ? '스리백' : '포백') + ' · 최전방 ' + st + '명'
+    };
+  }
+
+  function famOf(t) {
+    return (t && t.familiarity && FAM_BY_ID[t.familiarity]) || null;
+  }
+
+  /*
+   * ── 슬롯 구성 진단 ──────────────────────────────────────────────────────
+   *
+   * "카운터 전술을 상대마다 유지하면 전술 적응력이 실패하지 않느냐"는 질문의
+   * 답은 슬롯 구성에 달려 있습니다. 이미 익힌 슬롯끼리 갈아타는 것은 공짜지만,
+   * 뼈대가 다 제각각인 슬롯 세 개는 훈련이 셋으로 쪼개져 어느 것도 안 올라갑니다.
+   * 반대로 셋 다 성격이 비슷하면 훈련은 싸지만 강팀 원정에서 꺼낼 게 없습니다.
+   *
+   * 이 함수는 그 둘을 같이 봅니다 — 훈련 비용과 대응 폭.
+   */
+  function slotAudit(tactics) {
+    var slots = (tactics || []).filter(function (t) {
+      return t && t.formationId && FORMATION_BY_ID[t.formationId];
+    }).map(function (t) {
+      var f = FORMATION_BY_ID[t.formationId];
+      var sh = shapeOf(f);
+      return {
+        tactic: t, formation: f, shape: sh.key, shapeKo: sh.ko,
+        fam: famOf(t),
+        roles: (TD.SLOT_ROLES || []).filter(function (r) {
+          return r.tags.some(function (tag) { return f.tags.indexOf(tag) >= 0; });
+        }).map(function (r) { return r.id; })
+      };
+    });
+
+    var n = slots.length;
+    var findings = [];
+    var shapes = {};
+    slots.forEach(function (s) { shapes[s.shape] = (shapes[s.shape] || 0) + 1; });
+    var shapeKeys = Object.keys(shapes);
+
+    var covered = {}, missing = [];
+    (TD.SLOT_ROLES || []).forEach(function (r) {
+      var who = slots.filter(function (s) { return s.roles.indexOf(r.id) >= 0; });
+      covered[r.id] = who.map(function (s) { return s.tactic.name; });
+      if (!who.length) missing.push(r);
+    });
+
+    if (!n) {
+      findings.push({
+        kind: 'none', level: 'high',
+        text: '저장한 전술이 없습니다 — 「맞춤 전술」이 상대마다 포메이션까지 새로 고릅니다.',
+        fix: '그대로 따라 하면 게임에서 전술 친숙도가 매번 리셋됩니다. 지금 전술을 슬롯에 저장해 두세요.'
+      });
+      return { slots: slots, findings: findings, count: 0, shapes: shapeKeys, covered: covered, missing: missing, split: '' };
+    }
+
+    // ── 훈련 비용 ──
+    if (n === 1) {
+      findings.push({
+        kind: 'single', level: 'note',
+        text: '슬롯이 하나입니다 — 훈련이 전부 여기에 몰리니 친숙도는 가장 빨리 올라갑니다.',
+        fix: '대신 성격이 다른 상대를 만나면 형태를 바꿀 수단이 없습니다. 익은 뒤에 두 번째를 만드세요.'
+      });
+    } else if (shapeKeys.length === 1) {
+      findings.push({
+        kind: 'one-shape', level: 'good',
+        text: '슬롯 ' + n + '개가 모두 같은 뼈대(' + slots[0].shapeKo + ')입니다 — 선수들이 서는 자리가 같아 훈련이 가장 싸게 먹힙니다.',
+        fix: ''
+      });
+    } else if (shapeKeys.length === n && n >= 3) {
+      findings.push({
+        kind: 'all-distinct', level: 'high',
+        text: '슬롯 ' + n + '개의 뼈대가 전부 다릅니다(' + slots.map(function (s) { return s.shapeKo; }).join(' / ') + ') — 전술 훈련이 ' + (KO_COUNT[n] || n + '개') + '으로 쪼개져 어느 것도 잘 안 올라갑니다.',
+        fix: '두 개는 뒷선과 최전방 인원을 맞추세요. 선수들이 서는 자리가 같으면 개인 포지션 친숙도가 그대로 이어져 훨씬 싸게 익습니다.'
+      });
+    } else if (shapeKeys.length === n) {
+      // 슬롯 둘, 뼈대 둘. 대응 폭은 생기지만 훈련이 정확히 반으로 갈립니다.
+      findings.push({
+        kind: 'split-shape', level: 'note',
+        text: '슬롯 둘의 뼈대가 다릅니다(' + slots.map(function (s) { return s.shapeKo; }).join(' / ') + ') — 대응 폭은 넓어지지만 전술 훈련이 둘로 갈립니다.',
+        fix: '둘 다 익을 때까지는 세 번째를 만들지 마세요. 어중간한 셋보다 몸에 밴 둘이 셉니다.'
+      });
+    } else {
+      // 셋 중 둘이 같은 뼈대 — 훈련이 한쪽에 모이면서 대응 폭도 남습니다.
+      findings.push({
+        kind: 'shared-shape', level: 'good',
+        text: '슬롯 ' + n + '개 중 둘이 같은 뼈대(' + slots.filter(function (s) { return shapes[s.shape] > 1; })[0].shapeKo + ')라 훈련이 그쪽에 모입니다 — 대응 폭과 훈련 비용이 둘 다 맞는 구성입니다.',
+        fix: ''
+      });
+    }
+
+    // ── 중복 ──
+    var byFormation = {};
+    slots.forEach(function (s) {
+      (byFormation[s.formation.id] = byFormation[s.formation.id] || []).push(s.tactic.name);
+    });
+    Object.keys(byFormation).forEach(function (fid) {
+      if (byFormation[fid].length < 2) return;
+      findings.push({
+        kind: 'duplicate', level: 'note',
+        text: '「' + byFormation[fid].join('」와 「') + '」' + iga(byFormation[fid][byFormation[fid].length - 1])
+          + ' 같은 포메이션입니다(' + FORMATION_BY_ID[fid].ko + ').',
+        fix: 'FM에서는 같은 포메이션을 멘탈리티만 바꿔 두 벌 저장하는 것이 유효하지만, 이 도구는 어차피 상대마다 역할·임무·지시를 바꿔 줍니다. 슬롯은 형태가 다를 때만 여기서 의미가 있습니다.'
+      });
+    });
+
+    // ── 대응 폭 ──
+    missing.forEach(function (r) {
+      var full = n >= MAX_SLOTS;
+      findings.push({
+        kind: 'gap-' + r.id, level: 'note',
+        text: '「' + r.ko + '」에 쓸 형태가 슬롯에 없습니다 — ' + r.why,
+        fix: full
+          ? '슬롯 ' + MAX_SLOTS + '개가 다 찼습니다. 가장 안 쓰는 슬롯을 이 자리로 바꿀지 검토해 보세요.'
+          : '남은 슬롯에 이 성격의 포메이션을 하나 넣어 두면 대응 폭이 생깁니다.'
+      });
+    });
+
+    // ── 친숙도 ──
+    var unknown = slots.filter(function (s) { return !s.fam; });
+    var raw = slots.filter(function (s) { return s.fam && s.fam.penalty >= 6; });
+    if (raw.length) {
+      findings.push({
+        kind: 'untrained', level: 'high',
+        // 조사를 괄호 뒤에 붙이면 「B · 수비」(어색함)는 처럼 어긋납니다.
+        text: raw.length > 1
+          ? '아직 덜 익은 슬롯이 ' + (KO_COUNT[raw.length] || raw.length + '개') + '입니다 — '
+            + raw.map(function (s) { return '「' + s.tactic.name + '」(' + s.fam.ko + ')'; }).join(', ') + '.'
+          : '「' + raw[0].tactic.name + '」' + eun(raw[0].tactic.name) + ' 아직 ' + raw[0].fam.ko
+            + '입니다 — 지금 꺼내면 점수표대로 안 나옵니다.',
+        fix: raw[0].fam.fix
+      });
+    }
+    if (unknown.length === n) {
+      findings.push({
+        kind: 'fam-unknown', level: 'note',
+        text: '슬롯 친숙도를 아직 넣지 않았습니다 — 지금은 종이 위 궁합만 보고 고릅니다.',
+        fix: 'FM 전술 화면의 친숙도 막대를 보고 슬롯마다 넣어 두면, 형태가 조금 덜 맞아도 몸에 밴 쪽을 고릅니다.'
+      });
+    }
+
+    var split = n === 1
+      ? '전술 훈련 세션이 전부 이 하나에 들어갑니다.'
+      : '전술 훈련 세션 한 칸은 전술 하나만 올립니다 — 슬롯이 ' + (KO_COUNT[n] || n + '개')
+        + '이면 같은 주에 다 올릴 수 없습니다.';
+
+    return {
+      slots: slots, findings: findings, count: n,
+      shapes: shapeKeys, covered: covered, missing: missing, split: split
+    };
+  }
 
   function pickTactic(input) {
     var tactics = (input.tactics || []).filter(function (t) {
@@ -2453,45 +2625,111 @@
     if (!fitted) return null;
     var free = generate(Object.assign({}, input, { allowedFormations: null }));
 
-    // 슬롯별 점수 — 저장한 순서가 아니라 이 상대에 맞는 순서로 세웁니다.
+    /*
+     * 슬롯별 점수 — 저장한 순서가 아니라 이 상대에 맞는 순서로 세웁니다.
+     *
+     * total은 종이 위 궁합, effective는 거기서 친숙도만큼 깎은 값입니다.
+     * 친숙도를 아직 안 넣었으면 둘이 같으므로 예전과 똑같이 동작합니다.
+     */
     var byId = {};
     (fitted.formationRanking || []).forEach(function (r) { byId[r.id] = r; });
     var ranking = tactics.map(function (t) {
       var r = byId[t.formationId] || null;
+      var fam = famOf(t);
+      var total = r ? r.total : null;
+      var pen = fam ? fam.penalty : 0;
+      var sh = shapeOf(FORMATION_BY_ID[t.formationId]);
       return {
         tactic: t,
         formation: FORMATION_BY_ID[t.formationId],
-        total: r ? r.total : null,
+        total: total,
+        fam: fam,
+        famPenalty: pen,
+        effective: total === null ? null : round1(total - pen),
+        shape: sh.key, shapeKo: sh.ko,
         notes: r ? r.notes : [],
         weakness: FORMATION_BY_ID[t.formationId].weakness
       };
-    }).sort(function (a, b) { return (b.total === null ? -1e9 : b.total) - (a.total === null ? -1e9 : a.total); });
+    }).sort(function (a, b) {
+      return (b.effective === null ? -1e9 : b.effective) - (a.effective === null ? -1e9 : a.effective);
+    });
 
     var best = ranking[0];
-    var freeTop = (free && free.formationRanking && free.formationRanking[0]) || null;
-    var saved = best.total;
-    var gap = (freeTop && saved !== null) ? round1(freeTop.total - saved) : 0;
-    var sameAsFree = !freeTop || freeTop.id === best.tactic.formationId;
 
-    var advise = 'use-saved', note = '';
+    // 종이 위 궁합만 봤을 때의 1위. 친숙도가 순서를 뒤집었는지 보려면 따로 필요합니다.
+    var rawBest = ranking.slice().sort(function (a, b) {
+      return (b.total === null ? -1e9 : b.total) - (a.total === null ? -1e9 : a.total);
+    })[0];
+
+    /*
+     * 친숙도가 순서를 뒤집었으면 그 슬롯으로 다시 짭니다.
+     * generate는 저장된 것 중 점수 1위를 고르므로, 그대로 두면 화면에 나온
+     * 슬롯 이름과 실제 선발이 어긋납니다.
+     */
+    if (best.tactic.formationId !== fitted.xi.formation.id) {
+      var redone = generate(Object.assign({}, input, { allowedFormations: [best.tactic.formationId] }));
+      if (redone) fitted = redone;
+    }
+
+    var freeTop = (free && free.formationRanking && free.formationRanking[0]) || null;
+    // 새 포메이션을 만들지 말지는 '종이 위 궁합'끼리 견줍니다. 저장본이 덜 익었다는
+    // 것은 훈련으로 풀 문제이지 포메이션을 하나 더 만들 이유가 아닙니다.
+    var saved = rawBest.total;
+    var gap = (freeTop && saved !== null) ? round1(freeTop.total - saved) : 0;
+    var sameAsFree = !freeTop || freeTop.id === rawBest.tactic.formationId;
+
+    /*
+     * 친숙도가 선택을 바꾼 경우 — 왜 점수 1위를 안 골랐는지 먼저 말해야 합니다.
+     * 말하지 않으면 표에 보이는 숫자와 추천이 어긋난 것으로만 보입니다.
+     */
+    var famOverride = null;
+    if (rawBest.tactic !== best.tactic) {
+      famOverride = {
+        from: rawBest, to: best,
+        diff: round1((rawBest.total || 0) - (best.total || 0)),
+        text: '형태만 보면 「' + rawBest.tactic.name + '」' + iga(rawBest.tactic.name) + ' '
+          + round1((rawBest.total || 0) - (best.total || 0)) + '점 낫지만 아직 ' + rawBest.fam.ko
+          + ira(rawBest.fam.ko) + ', 이번 경기는 ' + (best.fam ? best.fam.ko + '까지 올라온 ' : '')
+          + '「' + best.tactic.name + '」' + eul(best.tactic.name) + ' 씁니다 — '
+          + '안 익은 전술은 점수표대로 안 나옵니다.'
+      };
+    }
+
+    // 제약 없이 골랐다면 어땠을까 — 새 포메이션을 만들지 말지는 여기서 갈립니다.
+    var advise = 'use-saved', tail = '';
     if (sameAsFree) {
-      note = '저장해 둔 전술 중 「' + best.tactic.name + '」' + iga(best.tactic.name)
-        + ' 이 상대에 가장 맞고, 제약 없이 골라도 같은 형태입니다.';
+      tail = '제약 없이 골라도 ' + rawBest.formation.ko + iga(rawBest.formation.ko)
+        + ' 1위입니다 — 슬롯 구성 자체는 이 상대에 맞습니다.';
     } else if (gap < NEW_TACTIC_GAP) {
-      note = '저장해 둔 전술 중에서는 「' + best.tactic.name + '」' + iga(best.tactic.name) + ' 낫습니다. '
-        + freeTop.ko + iga(freeTop.ko) + ' 조금 더 맞지만(+' + gap + ') 그 차이로 포메이션을 새로 익힐 값어치는 없습니다 — '
-        + '전술 친숙도가 리셋되는 손해가 더 큽니다.';
+      tail = '제약 없이 고르면 ' + freeTop.ko + iga(freeTop.ko) + ' 조금 더 맞지만(+' + gap + ') '
+        + '그 차이로 포메이션을 새로 익힐 값어치는 없습니다 — 전술 친숙도가 리셋되는 손해가 더 큽니다.';
     } else {
       advise = 'consider-new';
-      note = '저장해 둔 전술로는 이 상대가 버겁습니다. ' + freeTop.ko + iga(freeTop.ko) + ' '
-        + best.formation.ko + '보다 ' + gap + '점 낫습니다. '
+      tail = '저장해 둔 전술로는 이 상대가 버겁습니다. ' + freeTop.ko + iga(freeTop.ko) + ' '
+        + rawBest.formation.ko + '보다 ' + gap + '점 낫습니다. '
         + '다만 새 포메이션은 선수들이 익히는 데 시간이 걸리므로, 이번 한 경기 때문에 바꾸지는 마세요 — '
         + '같은 유형의 상대를 자주 만난다면 세 번째 슬롯으로 만들어 두고 훈련시키는 쪽이 맞습니다.';
+    }
+
+    // 왜 이 슬롯인가 — 한 문장.
+    var lead = famOverride ? famOverride.text
+      : advise === 'consider-new'
+        ? '저장해 둔 전술 중에서는 「' + best.tactic.name + '」' + iga(best.tactic.name) + ' 낫습니다.'
+        : '저장해 둔 전술 중 「' + best.tactic.name + '」' + iga(best.tactic.name) + ' 이 상대에 가장 맞습니다.';
+    var note = lead + ' ' + tail;
+
+    // 고른 슬롯 자체가 덜 익었으면 그것도 말합니다.
+    var trainNote = '';
+    if (best.fam && best.fam.penalty >= 6) {
+      trainNote = '다만 「' + best.tactic.name + '」' + eun(best.tactic.name) + ' 아직 ' + best.fam.ko
+        + '입니다 — ' + best.fam.fix;
     }
 
     return {
       best: best, ranking: ranking, result: fitted,
       free: free, freeTop: freeTop, gap: gap, sameAsFree: sameAsFree,
+      rawBest: rawBest, famOverride: famOverride, trainNote: trainNote,
+      audit: slotAudit(tactics),
       advise: advise, note: note
     };
   }
@@ -2916,6 +3154,9 @@
     setPieces: setPieces,
     trainingPlan: trainingPlan,
     pickTactic: pickTactic,
+    slotAudit: slotAudit,
+    NEW_TACTIC_GAP: NEW_TACTIC_GAP,
+    MAX_SLOTS: MAX_SLOTS,
     traitAdjust: traitAdjust,
     splitAvailable: splitAvailable,
     josa: { ro: ro, eul: eul, iga: iga, eun: eun, wa: wa, ira: ira },
