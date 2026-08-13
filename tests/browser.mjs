@@ -236,7 +236,86 @@ await test('특성을 연달아 켜도 카드가 접히지 않고, 목록이 역
   await page.close();
 });
 
-// ── 4. 간편 입력이 실제 능력치를 말없이 덮지 않는다 ───────────────────────
+// ── 4. 시즌 중 영입 — 프로필 파일 하나로 등록 ─────────────────────────────
+/*
+ * 시즌 초에 스쿼드 전체를 한 번 넣고, 그 뒤 영입은 그 선수 프로필 하나로 끝나야
+ * 한다. 능력치를 한 명씩 다시 치는 것은 아무도 안 한다.
+ *
+ * FM은 인쇄할 때 화면의 '표'만 옮기므로 프로필 파일에는 능력치와 신장·체중만
+ * 들어 있다. 이름·나이·포지션·특성은 없으므로 물어보되, 한 카드에서 끝나야 한다.
+ */
+await test('영입 선수를 프로필 파일 하나로 등록한다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  const before = (await stored(page)).players.length;
+
+  await page.locator('#tab-squad input[type=file]').first().setInputFiles(
+    [{ name: 'ko-player-profile.html', mimeType: 'text/html', buffer: fx('ko-player-profile.html') }]);
+  await page.waitForTimeout(1000);
+
+  const card = page.locator('#tab-squad .card').filter({ hasText: /선수 프로필 \d+건/ }).first();
+  assert.equal(await card.count(), 1, '프로필 카드가 안 떴다');
+  assert.ok(/능력치 36개/.test(await card.innerText()), '능력치를 자동으로 안 읽었다');
+
+  await card.locator('input[type=text]').first().fill('새 영입');
+  await card.locator('input[type=number]').first().fill('24');
+  // 포지션을 고르면 그 자리에 맞는 특성이 따라 나와야 한다
+  await card.locator('.chip', { hasText: 'AM(L)' }).first().click();
+  await page.waitForTimeout(400);
+  const card2 = page.locator('#tab-squad .card').filter({ hasText: /선수 프로필 \d+건/ }).first();
+  const traitChips = await card2.locator('.chips').nth(1).locator('.chip').count();
+  assert.ok(traitChips > 0, '포지션을 골랐는데 특성 목록이 안 나온다');
+  await card2.locator('.chips').nth(1).locator('.chip').first().click();
+  await page.waitForTimeout(400);
+
+  const card3 = page.locator('#tab-squad .card').filter({ hasText: /선수 프로필 \d+건/ }).first();
+  await card3.locator('button', { hasText: '이 선수로 등록' }).click();
+  await page.waitForTimeout(700);
+
+  const st = await stored(page);
+  assert.equal(st.players.length, before + 1, '선수가 추가되지 않았다');
+  const np = st.players.find((p) => p.name === '새 영입');
+  assert.ok(np, '이름으로 못 찾겠다');
+  assert.equal(Object.keys(np.attrs).filter((k) => np.attrs[k] > 0).length, 36,
+    '프로필 능력치 36개가 다 안 들어갔다');
+  assert.equal(np.age, 24, '나이가 안 들어갔다');
+  assert.deepEqual(np.positions, ['AML'], '포지션이 안 들어갔다');
+  assert.equal((np.traits || []).length, 1, '특성이 안 들어갔다');
+  // 카드는 처리 후 사라져야 한다
+  assert.equal(await page.locator('#tab-squad .card').filter({ hasText: /선수 프로필 \d+건/ }).count(), 0,
+    '등록했는데 카드가 남아 있다');
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 5. 필드 선수에게 골키퍼 능력치를 묻지 않는다 ──────────────────────────
+await test('필드 선수 편집에는 골키퍼 능력치가 안 나오고, 입력률도 36 기준이다', async () => {
+  const page = await openPage();
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  // 포지션이 없는 스쿼드라 필드 선수로 본다
+  const rowText = await page.locator('#tab-squad .prow').first().innerText();
+  assert.ok(/\/36/.test(rowText), `입력률이 36 기준이 아니다: ${rowText.replace(/\n/g, ' ')}`);
+
+  await page.locator('#tab-squad .prow button', { hasText: '편집' }).first().click();
+  await page.waitForTimeout(400);
+  const editor = page.locator('#playerEditor');
+  const heads = await editor.locator('h3, .grouphead, label').allInnerTexts();
+  assert.ok(!heads.some((t) => /^GK$/.test(t.trim())), '필드 선수에게 골키퍼 묶음이 보인다');
+  assert.ok(await editor.locator('button', { hasText: '골키퍼 능력치도 입력' }).count(),
+    '필요할 때 펼 방법이 없다');
+
+  await editor.locator('button', { hasText: '골키퍼 능력치도 입력' }).click();
+  await page.waitForTimeout(400);
+  assert.ok(await page.locator('#playerEditor button', { hasText: '골키퍼 능력치 숨기기' }).count(),
+    '펴고 나서 다시 접을 방법이 없다');
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 6. 간편 입력이 실제 능력치를 말없이 덮지 않는다 ───────────────────────
 await test('「전체 채우기」는 실제 능력치를 덮기 전에 물어본다', async () => {
   const page = await openPage();
   await page.goto(BASE, { waitUntil: 'networkidle' });
@@ -257,7 +336,7 @@ await test('「전체 채우기」는 실제 능력치를 덮기 전에 물어�
   await page.close();
 });
 
-// ── 5. 좁은 화면에서 가로로 넘치지 않는다 ─────────────────────────────────
+// ── 7. 좁은 화면에서 가로로 넘치지 않는다 ─────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });

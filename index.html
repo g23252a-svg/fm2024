@@ -635,70 +635,146 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    * 프로필 화면으로 들어온 능력치를 누구에게 붙일지 고릅니다.
    * 새 선수로 넣을 수도, 기존 선수를 갱신할 수도 있습니다.
    */
+  /*
+   * 영입한 선수를 프로필 화면 하나로 등록하기.
+   *
+   * FM은 인쇄할 때 **화면의 표만** 옮깁니다. 선수 프로필 화면에서 표는 능력치와
+   * 신장·체중뿐이고, 이름·나이·포지션·선호플레이는 표가 아니라 패널이라 파일에
+   * 들어오지 않습니다. 그래서 능력치 36개는 자동으로 들어가고 나머지는 물어봅니다.
+   *
+   * 대신 흩어 놓지 않습니다 — 예전에는 이름만 받고 "추가한 뒤 포지션을 지정하세요"로
+   * 넘겼는데, 그러면 선수 목록에서 다시 찾아 편집 창을 열어야 했습니다. 게임 화면을
+   * 보고 있는 동안 한 카드에서 끝나야 합니다.
+   */
   function pendingProfileCard() {
     var list = S.pendingProfiles || [];
     if (!list.length) return null;
+    var TR = window.FM_TRAIT_DATA;
     var card = h('div', { class: 'card', style: 'border-color:#1e3a4a;background:rgba(56,189,248,.05)' }, [
       h('h2', { text: '선수 프로필 ' + list.length + '건 — 누구인가요?' }),
-      h('div', { class: 'desc', text: '선수 한 명의 화면에는 이름이 들어 있지 않습니다. 새로 영입한 선수면 이름을 적어 추가하고, 기존 선수의 능력치를 갱신하는 것이면 목록에서 고르세요. 포지션도 프로필에 없으니 추가한 뒤 지정해야 합니다.' })
+      h('div', { class: 'desc' }, [
+        'FM은 인쇄할 때 화면의 ', h('b', { style: 'color:var(--text)', text: '표만' }),
+        ' 옮깁니다. 그래서 능력치는 그대로 들어왔지만 ',
+        h('b', { style: 'color:var(--text)', text: '이름 · 나이 · 포지션 · 선호플레이는 파일에 없습니다' }),
+        ' — 게임 화면을 보면서 아래에 그대로 옮겨 적으면 한 번에 끝납니다.'
+      ])
     ]);
+
     list.forEach(function (prof, idx) {
-      var nameInput, sel;
+      // 이 카드 안에서만 쓰는 임시 값. 화면을 다시 그려도 남도록 prof에 붙입니다.
+      prof.draft = prof.draft || { name: '', age: '', positions: [], traits: [] };
+      var d = prof.draft;
       function drop() { S.pendingProfiles.splice(idx, 1); save(); render(); }
-      card.appendChild(h('div', { class: 'rep', style: 'margin-top:8px' }, [
-        h('div', { class: 'small', style: 'margin-bottom:8px' }, [
-          h('b', { text: '능력치 ' + prof.count + '개' }),
-          prof.name ? h('span', { class: 'tiny muted', text: '  · ' + prof.name }) : null,
-          prof.meta && prof.meta.height ? h('span', { class: 'tiny muted', text: '  · ' + prof.meta.height + ' / ' + (prof.meta.weight || '') }) : null
+      function redraw() { save(); render(); }
+
+      var box = h('div', { class: 'rep', style: 'margin-top:8px' });
+      box.appendChild(h('div', { class: 'small', style: 'margin-bottom:9px' }, [
+        h('b', { text: '능력치 ' + prof.count + '개' }),
+        h('span', { class: 'tiny muted', text: '  · ' + (prof.name || '프로필') }),
+        prof.meta && prof.meta.height
+          ? h('span', { class: 'tiny muted', text: '  · ' + prof.meta.height + ' / ' + (prof.meta.weight || '') })
+          : null
+      ]));
+
+      // ── 새 선수로 추가 ──
+      box.appendChild(h('div', { class: 'grid2' }, [
+        h('div', { class: 'field' }, [
+          h('label', { class: 'f', text: '이름' }),
+          h('input', {
+            type: 'text', placeholder: '예: 손흥민', value: d.name,
+            oninput: function (e) { d.name = e.target.value; }
+          })
         ]),
-        h('div', { class: 'grid2' }, [
-          h('div', {}, [
-            h('label', { class: 'f', text: '새 선수로 추가' }),
-            (nameInput = h('input', { type: 'text', placeholder: '선수 이름' })),
-            h('button', {
-              class: 'btn sm pri', style: 'margin-top:6px;width:100%',
-              onclick: function () {
-                var nm = (nameInput.value || '').trim();
-                if (!nm) { toast('이름을 적어 주세요.'); return; }
-                var merged = IMP.mergeSquad(S.players, [{
-                  id: 'prof' + Date.now(), name: nm, positions: [], foot: 'B', attrs: prof.attrs
-                }]);
-                S.players = merged.players;
-                S.editing = S.players.length - 1;
-                S._baseCache = null; S._needsCache = null; S._trainCache = null;
-                drop();
-                toast(nm + ' 추가 — 포지션을 지정해 주세요.');
-              }
-            }, ['추가하고 포지션 지정'])
-          ]),
-          h('div', {}, [
-            h('label', { class: 'f', text: '기존 선수 갱신' }),
-            (sel = (function () {
-              var s2 = h('select');
-              s2.appendChild(h('option', { value: '', text: '선수 선택…' }));
-              S.players.forEach(function (p, i) {
-                s2.appendChild(h('option', { value: String(i), text: p.name }));
-              });
-              return s2;
-            })()),
-            h('button', {
-              class: 'btn sm', style: 'margin-top:6px;width:100%',
-              onclick: function () {
-                if (sel.value === '') { toast('선수를 골라 주세요.'); return; }
-                var target = S.players[+sel.value];
-                var merged = IMP.mergeSquad(S.players, [{ name: target.name, positions: [], attrs: prof.attrs }]);
-                S.players = merged.players;
-                S._baseCache = null; S._needsCache = null; S._trainCache = null;
-                drop();
-                toast(target.name + '의 능력치를 갱신했습니다.');
-              }
-            }, ['이 선수 갱신'])
-          ])
-        ]),
-        h('div', { class: 'row', style: 'margin-top:8px' }, [
-          h('button', { class: 'btn sm ghost', onclick: drop }, ['버리기'])
+        h('div', { class: 'field' }, [
+          h('label', { class: 'f', text: '나이 (선택)' }),
+          h('input', {
+            type: 'number', min: '15', max: '45', inputmode: 'numeric',
+            placeholder: '모름', value: d.age === '' ? '' : String(d.age),
+            oninput: function (e) { d.age = e.target.value; }
+          })
         ])
       ]));
+
+      box.appendChild(h('label', { class: 'f', text: '포지션 (게임 화면의 포지션 그대로)' }));
+      var posChips = h('div', { class: 'chips', style: 'margin-bottom:10px' });
+      RD.POSITIONS.forEach(function (pos) {
+        posChips.appendChild(h('button', {
+          class: 'chip', 'aria-pressed': d.positions.indexOf(pos.id) >= 0 ? 'true' : 'false',
+          onclick: function () {
+            var i = d.positions.indexOf(pos.id);
+            if (i >= 0) d.positions.splice(i, 1); else d.positions.push(pos.id);
+            redraw();
+          }
+        }, [pos.ko]));
+      });
+      box.appendChild(posChips);
+
+      // ── 선호플레이 ──
+      // 포지션을 고른 뒤에야 무엇을 물어볼지 정할 수 있으므로 그때 폅니다.
+      if (TR && d.positions.length) {
+        var groups = TRAIT_POS_GROUPS[posBand({ positions: d.positions })];
+        box.appendChild(h('label', { class: 'f', text: '선호플레이 (게임 화면 왼쪽 아래)' }));
+        var trChips = h('div', { class: 'chips', style: 'margin-bottom:10px' });
+        TR.TRAITS.forEach(function (t) {
+          if (groups.indexOf(t.group) < 0 && d.traits.indexOf(t.id) < 0) return;
+          trChips.appendChild(h('button', {
+            class: 'chip', title: t.en + (t.note ? ' — ' + t.note : ''),
+            'aria-pressed': d.traits.indexOf(t.id) >= 0 ? 'true' : 'false',
+            onclick: function () {
+              var i = d.traits.indexOf(t.id);
+              if (i >= 0) d.traits.splice(i, 1); else d.traits.push(t.id);
+              redraw();
+            }
+          }, [t.ko]));
+        });
+        box.appendChild(trChips);
+      }
+
+      box.appendChild(h('div', { class: 'row' }, [
+        h('button', {
+          class: 'btn sm pri',
+          onclick: function () {
+            var nm = (d.name || '').trim();
+            if (!nm) { toast('이름을 적어 주세요.'); return; }
+            if (S.players.some(function (p) { return p.name === nm; })) {
+              if (!window.confirm('이미 「' + nm + '」이(가) 있습니다.\n그 선수의 능력치를 이 프로필로 갱신할까요?')) return;
+            }
+            var age = parseInt(d.age, 10);
+            var np = {
+              id: 'prof' + Date.now(), name: nm, positions: d.positions.slice(),
+              foot: 'B', attrs: prof.attrs
+            };
+            if (isFinite(age) && age >= 15 && age <= 45) np.age = age;
+            if (d.traits.length) np.traits = d.traits.slice();
+            var merged = IMP.mergeSquad(S.players, [np]);
+            S.players = merged.players;
+            S._baseCache = null; S._needsCache = null; S._trainCache = null;
+            drop();
+            toast(nm + ' 등록 — 능력치 ' + prof.count + '개'
+              + (d.positions.length ? ' · ' + d.positions.join(' · ') : ' · 포지션 없음')
+              + (d.traits.length ? ' · 특성 ' + d.traits.length + '개' : ''));
+          }
+        }, ['이 선수로 등록']),
+        h('button', {
+          class: 'btn sm ghost',
+          onclick: function () {
+            // 이미 있는 선수의 능력치만 갈아 끼우는 경우(재계약·성장 후 다시 내보내기).
+            var names = S.players.map(function (p) { return p.name; });
+            if (!names.length) { toast('스쿼드가 비어 있습니다.'); return; }
+            var pick = window.prompt('능력치를 갱신할 선수 이름을 적으세요.\n\n' + names.join(', '), d.name || '');
+            if (pick === null) return;
+            var target = S.players.filter(function (p) { return p.name === pick.trim(); })[0];
+            if (!target) { toast('그런 이름의 선수가 없습니다.'); return; }
+            var merged = IMP.mergeSquad(S.players, [{ name: target.name, positions: [], attrs: prof.attrs }]);
+            S.players = merged.players;
+            S._baseCache = null; S._needsCache = null; S._trainCache = null;
+            drop();
+            toast(target.name + '의 능력치를 갱신했습니다.');
+          }
+        }, ['기존 선수 갱신']),
+        h('button', { class: 'btn sm ghost', onclick: drop }, ['버리기'])
+      ]));
+      card.appendChild(box);
     });
     return card;
   }
@@ -840,7 +916,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     var ta;
     var card = h('div', { class: 'card dropzone' }, [
       h('h2', { text: '스쿼드 가져오기' }),
-      h('div', { class: 'desc', text: 'FM에서 내보낸 파일(.html / .rtf)을 고르세요. 능력치 묶음별로 나눠 내보낸 파일을 여러 개 한 번에 골라도 되고, 이 카드 위로 끌어다 놓아도 됩니다. 같은 선수는 합쳐집니다.' }),
+      h('div', { class: 'desc' }, ['FM에서 내보낸 파일(.html / .rtf)을 고르세요. 능력치 묶음별로 나눠 내보낸 파일을 여러 개 한 번에 골라도 되고, 이 카드 위로 끌어다 놓아도 됩니다. 같은 선수는 합쳐집니다. ',
+        h('b', { style: 'color:var(--text)', text: '선수를 영입했으면 그 선수 프로필 화면 하나만 내보내 넣으세요' }),
+        ' — 능력치를 자동으로 읽고 이름·포지션만 물어봅니다.']),
       h('div', { class: 'row', style: 'margin-bottom:9px' }, [
         filePicker('파일 선택 (여러 개 가능)', doImportFiles),
         h('button', { class: 'btn', onclick: function () { doImportMany([{ name: null, text: ta.value }]); } }, ['붙여넣은 내용 가져오기']),
@@ -958,7 +1036,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     } else {
       var list = h('div', { class: 'plist' });
       S.players.forEach(function (p, i) {
-        var known = Object.keys(p.attrs || {}).filter(function (k) { return p.attrs[k] > 0; }).length;
+        var known = attrScope(p).filter(function (k) { return (p.attrs || {})[k] > 0; }).length;
         var est = quickCount(p);
         list.appendChild(h('div', { class: 'prow', style: p.out ? 'opacity:.5' : '' }, [
           h('div', { class: 'grow', style: 'min-width:0' }, [
@@ -969,9 +1047,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
               + (p.age ? '  · ' + p.age + '세' : '')
               + (p.out ? '  · ' + (p.outReason || '이탈') + ' — 선발에서 제외' : '') })
           ]),
-          h('div', { class: 'cov' }, [
+          h('div', { class: 'cov', title: isKeeper(p) ? '골키퍼 능력치 포함' : '필드 선수라 골키퍼 능력치는 세지 않습니다' }, [
             h('b', { style: known ? '' : 'color:var(--warn)', text: String(known) }),
-            '/' + RD.ATTR_ORDER.length
+            '/' + attrScope(p).length
           ]),
           h('button', {
             class: 'btn sm ghost', title: p.out ? '복귀 처리' : '부상·출전 불가로 표시',
@@ -1032,7 +1110,11 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    */
   function quickEntry(p) {
     var vals = {};
-    RD.QUICK_GROUPS.forEach(function (g) {
+    // 필드 선수에게 골키퍼 묶음을 물어봐야 소용이 없습니다.
+    var quickGroups = RD.QUICK_GROUPS.filter(function (g) {
+      return g.id !== 'gk' || isKeeper(p);
+    });
+    quickGroups.forEach(function (g) {
       // 이미 값이 있으면 그 묶음의 평균을 기본값으로 보여 줍니다.
       var known = g.attrs.map(function (a) { return (p.attrs || {})[a]; })
         .filter(function (v) { return typeof v === 'number' && v > 0; });
@@ -1062,7 +1144,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       // 그 표시가 하나씩 사라지고, 화면은 남은 추정 개수를 그대로 보여 줍니다.
       p.quickAttrs = p.quickAttrs || {};
       var touched = 0, replaced = 0;
-      RD.QUICK_GROUPS.forEach(function (g) {
+      quickGroups.forEach(function (g) {
         g.attrs.forEach(function (a) {
           if (onlyEmpty && p.attrs[a] > 0) return;
           if (p.attrs[a] > 0 && !p.quickAttrs[a]) replaced++;
@@ -1077,7 +1159,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     }
 
     var grid = h('div', { class: 'attrgrid' });
-    RD.QUICK_GROUPS.forEach(function (g) {
+    quickGroups.forEach(function (g) {
       grid.appendChild(h('div', { class: 'a', title: g.hint }, [
         h('label', { for: 'q_' + g.id, text: g.ko }),
         h('input', {
@@ -1414,7 +1496,23 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     card.appendChild(traitPicker(p));
     card.appendChild(quickEntry(p));
 
-    var groups = [['gk', 'GK'], ['tec', '기술'], ['men', '정신'], ['phy', '신체']];
+    var groups = [['tec', '기술'], ['men', '정신'], ['phy', '신체']];
+    // 골키퍼 묶음은 골키퍼에게만 먼저 보여 줍니다. 필드 선수도 필요하면 펼 수 있습니다.
+    var showGk = isKeeper(p) || !!S._open['gkAttrs.' + p.name];
+    if (showGk) groups.unshift(['gk', 'GK']);
+    if (!isKeeper(p)) {
+      card.appendChild(h('div', { class: 'row', style: 'margin-bottom:8px' }, [
+        h('button', {
+          class: 'btn sm ghost',
+          onclick: function () {
+            S._open['gkAttrs.' + p.name] = !showGk;
+            render();
+          }
+        }, [showGk ? '골키퍼 능력치 숨기기' : '골키퍼 능력치도 입력']),
+        h('span', { class: 'tiny muted', style: 'align-self:center',
+          text: showGk ? '' : '필드 선수라 골키퍼 능력치 11개는 빼 뒀습니다.' })
+      ]));
+    }
     groups.forEach(function (g) {
       var ids = RD.ATTR_ORDER.filter(function (id) { return RD.ATTRS[id].group === g[0]; });
       var grid = h('div', { class: 'attrgrid' });
@@ -1984,6 +2082,39 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
   // 한글 조사는 engine.js가 갖고 있습니다 — 결과 문장을 엔진도 만들기 때문입니다.
   var ro = E.josa.ro;
+
+  /*
+   * 필드 선수에게 골키퍼 능력치 11개는 필요 없습니다.
+   *
+   * 그런데 편집 화면은 전원에게 네 묶음을 다 보여 줬고, 입력률도 47 기준이라
+   * 필드 선수는 아무리 채워도 36/47로 남았습니다 — 다 넣었는데 덜 넣은 것처럼
+   * 보입니다. 실제로 FM 프로필 내보내기도 필드 선수는 36개만 나옵니다.
+   *
+   * 포지션을 모르면 필드로 봅니다(대부분이 필드 선수고, 골키퍼는 열어서 넣으면 됩니다).
+   */
+  function isKeeper(p) {
+    var list = p.positions || [];
+    if (list.length) return list.indexOf('GK') >= 0;
+    /*
+     * 포지션을 모를 때는 골키퍼 능력치의 크기로 봅니다. "값이 있으면 골키퍼"로
+     * 두면 안 됩니다 — FM 골키퍼 보기를 내보내면 스쿼드 전원에게 골키퍼 열이
+     * 붙어서 필드 선수도 1~4점씩 갖게 됩니다. 실제로 갈라 보면 필드 선수는
+     * 평균 2 언저리, 진짜 골키퍼는 12를 넘습니다.
+     */
+    var a = p.attrs || {};
+    var vals = RD.ATTR_ORDER
+      .filter(function (id) { return RD.ATTRS[id].group === 'gk' && a[id] > 0; })
+      .map(function (id) { return a[id]; });
+    if (vals.length < 4) return false;
+    var mean = vals.reduce(function (x, y) { return x + y; }, 0) / vals.length;
+    return mean >= 8;
+  }
+  function attrScope(p) {
+    var keeper = isKeeper(p);
+    return RD.ATTR_ORDER.filter(function (id) {
+      return keeper || RD.ATTRS[id].group !== 'gk';
+    });
+  }
 
   function quickCount(p) {
     return Object.keys(p.quickAttrs || {}).filter(function (k) {
