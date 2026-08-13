@@ -1944,6 +1944,82 @@ function run(opponent = {}, context = {}, players = squad) {
   }
 }
 
+// ── 전술 슬롯 ─────────────────────────────────────────────────────────────
+/*
+ * FM에서는 포메이션을 매 경기 갈아엎을 수 없다. 선수들이 익히는 데 몇 주가
+ * 걸리고(전술 친숙도) 바꾸면 리셋된다. 그런데 이 도구는 상대가 바뀔 때마다
+ * 포메이션을 새로 골랐다 — 상대 다섯 팀에 포메이션 네 종류가 나왔고, 그건
+ * 게임에서 따라 할 수 없는 조언이다.
+ *
+ * 그래서 FM처럼 최대 세 개를 들고 다니고 그중에서 고른다.
+ */
+{
+  const tactics = [
+    { id: 'a', name: 'A · 기본', formationId: '442d' },
+    { id: 'b', name: 'B · 수비', formationId: '4141' },
+    { id: 'c', name: 'C · 측면', formationId: '433dm' }
+  ];
+  const run = (opp) => E.pickTactic({
+    players: squad, tactics,
+    opponent: Object.assign({ formationId: '442', traits: [] }, opp),
+    context: { venue: 'home', odds: 'even', goal: 'win' }
+  });
+
+  const r = run({});
+  assert.ok(r, '슬롯이 있는데 아무것도 못 골랐다');
+  assert.equal(r.ranking.length, 3, `슬롯 ${r.ranking.length}개만 평가했다`);
+  // 고른 포메이션은 반드시 저장해 둔 것 중 하나여야 한다
+  const saved = new Set(tactics.map((t) => t.formationId));
+  assert.ok(saved.has(r.result.xi.formation.id),
+    `저장하지 않은 포메이션을 골랐다: ${r.result.xi.formation.id}`);
+  // 순위는 점수 내림차순
+  for (let i = 1; i < r.ranking.length; i++) {
+    assert.ok(r.ranking[i - 1].total >= r.ranking[i].total, '슬롯 순위가 정렬되지 않았다');
+  }
+  assert.ok(r.note && r.note.length > 10, '어느 것을 왜 골랐는지가 없다');
+  assert.ok(!/[은는이가을를와과]\([은는이가을를와과]\)/.test(r.note), `조사가 괄호로 남았다: ${r.note}`);
+
+  /*
+   * 상대가 바뀌어도 포메이션은 저장해 둔 셋 안에서만 움직여야 한다.
+   * 이게 이 기능의 전부다.
+   */
+  const seen = new Set();
+  for (const opp of [{}, { dline: 4, loe: 4, press: 4 }, { dline: 0, loe: 0, press: 1 },
+                     { transitionWon: 'counter' }, { formationId: '352' }, { formationId: '532' }]) {
+    const x = run(opp);
+    seen.add(x.result.xi.formation.id);
+    assert.ok(saved.has(x.result.xi.formation.id),
+      `상대가 바뀌자 저장하지 않은 포메이션으로 갔다: ${x.result.xi.formation.id}`);
+  }
+  assert.ok(seen.size <= 3, `저장한 것보다 많은 포메이션이 나왔다: ${seen.size}`);
+
+  // 저장해 둔 것으로 크게 부족하면 그 사실을 말해야 한다 — 조용히 넘어가면 안 된다
+  const narrow = E.pickTactic({
+    players: squad, tactics: [{ id: 'x', name: 'X', formationId: '541' }],
+    opponent: { formationId: '442', traits: [] },
+    context: { venue: 'home', odds: 'strong', goal: 'must-win' }
+  });
+  assert.ok(narrow, '슬롯 하나만 있어도 골라야 한다');
+  assert.equal(narrow.ranking.length, 1);
+  assert.ok(['use-saved', 'consider-new'].includes(narrow.advise));
+  if (narrow.advise === 'consider-new') {
+    assert.ok(/훈련|익히는/.test(narrow.note),
+      `새 전술을 권하면서 훈련이 필요하다는 말이 없다: ${narrow.note}`);
+  }
+
+  // 없는 포메이션 id는 조용히 거른다 (저장본이 낡았을 수 있다)
+  const bogus = E.pickTactic({
+    players: squad,
+    tactics: [{ id: 'z', name: 'Z', formationId: '없는포메이션' }, tactics[0]],
+    opponent: { formationId: '442', traits: [] }, context: { venue: 'home', odds: 'even', goal: 'win' }
+  });
+  assert.equal(bogus.ranking.length, 1, '없는 포메이션을 슬롯으로 셌다');
+
+  // 슬롯이 없으면 아무 말도 하지 않는다 (예전 사용자에게 영향이 없어야 한다)
+  assert.equal(E.pickTactic({ players: squad, tactics: [] }), null);
+  assert.equal(E.pickTactic({ players: squad }), null);
+}
+
 // ── 세트피스 ──────────────────────────────────────────────────────────────
 {
   // 데이터 정합성 — 알 수 없는 능력치를 쓰면 그 자리는 영영 비어 있는다

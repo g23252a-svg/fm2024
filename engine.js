@@ -2426,6 +2426,77 @@
   }
 
   /*
+   * ── 저장해 둔 전술 중에서 고르기 ────────────────────────────────────────
+   *
+   * FM에서는 포메이션을 매 경기 갈아엎을 수 없습니다. 선수들이 그 전술에
+   * 익숙해지는 데 몇 주가 걸리고(전술 친숙도), 바꾸는 순간 그게 리셋됩니다.
+   * 그런데 이 도구는 상대가 바뀔 때마다 포메이션을 새로 골랐습니다 — 상대
+   * 다섯 팀에 포메이션 네 종류가 나왔습니다. 게임에서 따라 할 수 없는 조언입니다.
+   *
+   * 그래서 FM처럼 전술을 최대 세 개 들고 다니고, 경기마다 **그중에서** 고릅니다.
+   * 포메이션은 고정한 채 역할·임무·지시만 상대에 맞춰 움직입니다.
+   *
+   * 저장해 둔 것으로 도저히 안 되는 상대도 있습니다. 그때는 조용히 새 포메이션을
+   * 내밀지 않고, 얼마나 차이가 나는지와 "새로 만들면 훈련이 필요하다"를 함께
+   * 말합니다 — 판단은 사람이 합니다.
+   */
+  var NEW_TACTIC_GAP = 12;   // 이 정도 벌어지면 새로 만드는 것을 검토할 만합니다
+
+  function pickTactic(input) {
+    var tactics = (input.tactics || []).filter(function (t) {
+      return t && t.formationId && FORMATION_BY_ID[t.formationId];
+    });
+    if (!tactics.length) return null;
+
+    var ids = tactics.map(function (t) { return t.formationId; });
+    var fitted = generate(Object.assign({}, input, { allowedFormations: ids }));
+    if (!fitted) return null;
+    var free = generate(Object.assign({}, input, { allowedFormations: null }));
+
+    // 슬롯별 점수 — 저장한 순서가 아니라 이 상대에 맞는 순서로 세웁니다.
+    var byId = {};
+    (fitted.formationRanking || []).forEach(function (r) { byId[r.id] = r; });
+    var ranking = tactics.map(function (t) {
+      var r = byId[t.formationId] || null;
+      return {
+        tactic: t,
+        formation: FORMATION_BY_ID[t.formationId],
+        total: r ? r.total : null,
+        notes: r ? r.notes : [],
+        weakness: FORMATION_BY_ID[t.formationId].weakness
+      };
+    }).sort(function (a, b) { return (b.total === null ? -1e9 : b.total) - (a.total === null ? -1e9 : a.total); });
+
+    var best = ranking[0];
+    var freeTop = (free && free.formationRanking && free.formationRanking[0]) || null;
+    var saved = best.total;
+    var gap = (freeTop && saved !== null) ? round1(freeTop.total - saved) : 0;
+    var sameAsFree = !freeTop || freeTop.id === best.tactic.formationId;
+
+    var advise = 'use-saved', note = '';
+    if (sameAsFree) {
+      note = '저장해 둔 전술 중 「' + best.tactic.name + '」' + iga(best.tactic.name)
+        + ' 이 상대에 가장 맞고, 제약 없이 골라도 같은 형태입니다.';
+    } else if (gap < NEW_TACTIC_GAP) {
+      note = '저장해 둔 전술 중에서는 「' + best.tactic.name + '」' + iga(best.tactic.name) + ' 낫습니다. '
+        + freeTop.ko + iga(freeTop.ko) + ' 조금 더 맞지만(+' + gap + ') 그 차이로 포메이션을 새로 익힐 값어치는 없습니다 — '
+        + '전술 친숙도가 리셋되는 손해가 더 큽니다.';
+    } else {
+      advise = 'consider-new';
+      note = '저장해 둔 전술로는 이 상대가 버겁습니다. ' + freeTop.ko + iga(freeTop.ko) + ' '
+        + best.formation.ko + '보다 ' + gap + '점 낫습니다. '
+        + '다만 새 포메이션은 선수들이 익히는 데 시간이 걸리므로, 이번 한 경기 때문에 바꾸지는 마세요 — '
+        + '같은 유형의 상대를 자주 만난다면 세 번째 슬롯으로 만들어 두고 훈련시키는 쪽이 맞습니다.';
+    }
+
+    return {
+      best: best, ranking: ranking, result: fitted,
+      free: free, freeTop: freeTop, gap: gap, sameAsFree: sameAsFree,
+      advise: advise, note: note
+    };
+  }
+
+  /*
    * ── 훈련 제안 ───────────────────────────────────────────────────────────
    *
    * 지금까지 이 도구는 "이 자리에 사람이 없으니 영입하라"까지만 말했습니다.
@@ -2844,6 +2915,7 @@
     chemistry: chemistry,
     setPieces: setPieces,
     trainingPlan: trainingPlan,
+    pickTactic: pickTactic,
     traitAdjust: traitAdjust,
     splitAvailable: splitAvailable,
     josa: { ro: ro, eul: eul, iga: iga, eun: eun, wa: wa, ira: ira },

@@ -403,6 +403,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     },
     context: { venue: 'home', odds: 'even', goal: 'win' },
     pinnedFormation: null,
+    // FM처럼 전술을 최대 3개 들고 다닙니다.
+    tactics: [],
     standing: 'mid',
     match: { phase: 'half-time', gf: 0, ga: 0, oppLevel: 'even', flags: [], stats: null, side: 'right' },
     tab: 'squad',
@@ -420,7 +422,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     try {
       localStorage.setItem(STORE, JSON.stringify({
         players: S.players, opponent: S.opponent, context: S.context,
-        pinnedFormation: S.pinnedFormation, opponentSquad: S.opponentSquad, standing: S.standing, match: S.match
+        pinnedFormation: S.pinnedFormation, opponentSquad: S.opponentSquad, standing: S.standing, match: S.match, tactics: S.tactics
       }));
     } catch (e) { /* 저장 공간이 없어도 이번 세션은 그대로 씁니다 */ }
   }
@@ -436,6 +438,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
       if (d.standing) S.standing = d.standing;
       if (d.match) Object.assign(S.match, d.match);
+      if (d.tactics) S.tactics = d.tactics;
     } catch (e) { /* 깨진 저장본은 무시하고 초기 상태로 */ }
   }
 
@@ -1849,9 +1852,25 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       return;
     }
 
+    /*
+     * 저장해 둔 전술이 있으면 그 안에서 고릅니다.
+     *
+     * 포메이션을 매 경기 바꾸면 게임에서 전술 친숙도가 리셋됩니다. 그래서
+     * 슬롯이 있으면 포메이션은 고정한 채 역할·임무·지시만 상대에 맞춰 움직이고,
+     * 저장해 둔 것으로 도저히 안 되는 상대면 그 사실을 따로 말합니다.
+     * 「포메이션 고정」을 직접 고른 경우는 그쪽이 우선입니다.
+     */
+    var pick = null;
+    var useSlots = (S.tactics || []).length && !S.pinnedFormation && S._ignoreSlots !== true;
     var res;
     try {
-      res = E.generate({
+      if (useSlots) {
+        pick = E.pickTactic({
+          players: S.players, tactics: S.tactics,
+          opponent: S.opponent, context: S.context
+        });
+      }
+      res = pick ? pick.result : E.generate({
         players: S.players,
         opponent: S.opponent,
         context: S.context,
@@ -1862,6 +1881,52 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         h('div', { class: 'rep err' }, ['전술을 만드는 중 문제가 생겼습니다: ' + (err && err.message)])
       ]));
       return;
+    }
+
+    // 어느 슬롯을 쓰는지, 그리고 왜.
+    if (pick) {
+      var pc = h('div', {
+        class: 'card',
+        style: pick.advise === 'consider-new'
+          ? 'border-color:#4a3c17;background:rgba(251,191,36,.06)'
+          : 'border-color:#2c4a35;background:rgba(74,222,128,.05)'
+      }, [
+        h('h2', {}, [
+          '이 상대에는 ',
+          h('span', { style: 'color:var(--acc)', text: pick.best.tactic.name }),
+          h('span', { class: 'tiny muted', text: '  ' + pick.best.formation.ko })
+        ]),
+        h('div', { class: 'small', style: 'color:var(--dim)', text: pick.note })
+      ]);
+      if (pick.ranking.length > 1) {
+        var rk = h('div', { class: 'statrows', style: 'margin-top:9px' });
+        pick.ranking.forEach(function (r, i) {
+          rk.appendChild(h('div', { class: 'statrow' }, [
+            h('b', { class: 'us', style: 'text-align:left;color:' + (i ? 'var(--dim2)' : 'var(--acc)'),
+              text: r.tactic.name }),
+            h('span', { class: 'lb', style: 'text-align:left', text: r.formation.ko }),
+            h('span', { class: 'them', text: r.total === null ? '—' : String(r.total) })
+          ]));
+        });
+        pc.appendChild(rk);
+      }
+      pc.appendChild(h('div', { class: 'row', style: 'margin-top:9px' }, [
+        h('button', {
+          class: 'btn sm ghost',
+          onclick: function () { S._ignoreSlots = true; render(); }
+        }, ['슬롯 무시하고 최적 포메이션 보기'])
+      ]));
+      root.appendChild(pc);
+    } else if ((S.tactics || []).length && S._ignoreSlots) {
+      root.appendChild(h('div', { class: 'card tight' }, [
+        h('div', { class: 'row' }, [
+          h('span', { class: 'small', style: 'align-self:center;color:var(--warn)',
+            text: '슬롯을 무시하고 있습니다 — 이 포메이션은 새로 훈련해야 합니다.' }),
+          h('button', {
+            class: 'btn sm', onclick: function () { S._ignoreSlots = false; render(); }
+          }, ['슬롯으로 돌아가기'])
+        ])
+      ]));
     }
 
     // 요약
@@ -2258,6 +2323,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         h('button', { class: 'btn', onclick: function () { copyBase(res); } }, ['전술 텍스트로 복사'])
       ])
     ]));
+
+    root.appendChild(tacticSlotCard(res));
 
     root.appendChild(fmStepsCard(res.plan, res.formation, res.instructions, res.individual.length));
     var unavB = unavailableNote(res.unavailable);
@@ -2854,6 +2921,83 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     return pc;
   }
 
+  /*
+   * ── 전술 슬롯 ───────────────────────────────────────────────────────────
+   *
+   * FM에서는 포메이션을 매 경기 갈아엎을 수 없습니다. 선수들이 익히는 데 몇 주가
+   * 걸리고(전술 친숙도), 바꾸는 순간 리셋됩니다. 그런데 이 도구는 상대가 바뀔
+   * 때마다 포메이션을 새로 골랐습니다 — 상대 다섯 팀에 포메이션 네 종류가
+   * 나왔습니다. 게임에서 따라 할 수 없는 조언이었습니다.
+   *
+   * 그래서 FM처럼 전술을 최대 세 개 저장해 두고, 경기마다 그중에서 고릅니다.
+   */
+  var MAX_TACTICS = 3;
+
+  function tacticSlotCard(res) {
+    var card = h('div', { class: 'card' }, [
+      h('h2', { text: '전술 슬롯' }),
+      h('div', { class: 'desc' }, [
+        'FM에서는 전술을 세 개까지 들고 다니고, ',
+        h('b', { style: 'color:var(--text)', text: '포메이션을 매 경기 바꿀 수 없습니다' }),
+        ' — 선수들이 익히는 데 몇 주가 걸리고 바꾸면 리셋됩니다. 여기에 저장해 두면 ',
+        h('b', { style: 'color:var(--text)', text: '「맞춤 전술」이 저장된 것 중에서만 고릅니다' }),
+        '(포메이션은 그대로 두고 역할·지시만 상대에 맞춥니다).'
+      ])
+    ]);
+
+    (S.tactics || []).forEach(function (t, i) {
+      var f = FD.FORMATIONS.filter(function (x) { return x.id === t.formationId; })[0];
+      card.appendChild(h('div', { class: 'rep', style: 'margin-bottom:7px' }, [
+        h('div', { class: 'row', style: 'gap:8px;align-items:center' }, [
+          h('input', {
+            type: 'text', value: t.name, style: 'flex:1 1 auto;min-width:0',
+            'aria-label': '전술 이름',
+            oninput: function (e) { t.name = e.target.value; save(); }
+          }),
+          h('button', {
+            class: 'btn sm ghost',
+            onclick: function () {
+              if (!window.confirm('「' + t.name + '」 슬롯을 지웁니다. 계속할까요?')) return;
+              S.tactics.splice(i, 1); save(); render();
+            }
+          }, ['지우기'])
+        ]),
+        h('div', { class: 'tiny muted', style: 'margin-top:5px',
+          text: (f ? f.ko : t.formationId) + (t.planKo ? ' · ' + t.planKo : '') })
+      ]));
+    });
+
+    var cur = res.formation.id;
+    var already = (S.tactics || []).some(function (t) { return t.formationId === cur; });
+    var full = (S.tactics || []).length >= MAX_TACTICS;
+    card.appendChild(h('div', { class: 'row', style: 'margin-top:8px' }, [
+      h('button', {
+        class: 'btn sm' + (already || full ? ' ghost' : ' pri'),
+        onclick: function () {
+          if (already) { toast('이미 같은 포메이션이 슬롯에 있습니다.'); return; }
+          if (full) { toast('슬롯이 세 개 다 찼습니다 — FM도 세 개까지입니다.'); return; }
+          S.tactics = (S.tactics || []).concat([{
+            id: 't' + Date.now(),
+            name: String.fromCharCode(65 + S.tactics.length) + ' · ' + res.plan.ko,
+            formationId: cur, planId: res.plan.id, planKo: res.plan.ko
+          }]);
+          save(); render();
+          toast('슬롯에 저장했습니다. 「맞춤 전술」이 이제 이 안에서 고릅니다.');
+        }
+      }, [already ? '이미 저장됨' : full ? '슬롯이 찼습니다' : '지금 전술을 슬롯에 저장']),
+      (S.tactics || []).length
+        ? h('span', { class: 'tiny muted', style: 'align-self:center',
+          text: S.tactics.length + '/' + MAX_TACTICS + ' 사용 중' })
+        : null
+    ]));
+
+    if (!(S.tactics || []).length) {
+      card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:8px',
+        text: '아직 저장한 전술이 없습니다 — 지금은 「맞춤 전술」이 매 경기 포메이션까지 새로 고릅니다. 그대로 따라 하면 전술 친숙도가 계속 리셋됩니다.' }));
+    }
+    return card;
+  }
+
   // 기본 전술 텍스트로 복사 — 맞춤 전술과 형식을 맞춥니다.
   function copyBase(res) {
     var L = [];
@@ -3258,6 +3402,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
                   if (d.context) Object.assign(S.context, d.context);
                   if (d.standing) S.standing = d.standing;
                   if (d.pinnedFormation !== undefined) S.pinnedFormation = d.pinnedFormation;
+                  if (d.tactics) S.tactics = d.tactics;
                   if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
                   if (d.match) Object.assign(S.match, d.match);
                   S._baseCache = null; S._needsCache = null; S._trainCache = null;
@@ -3296,7 +3441,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     return {
       v: 2, players: players, opponent: S.opponent, context: S.context,
       standing: S.standing, pinnedFormation: S.pinnedFormation,
-      opponentSquad: S.opponentSquad, match: S.match
+      opponentSquad: S.opponentSquad, match: S.match, tactics: S.tactics
     };
   }
 
@@ -3307,6 +3452,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (d.context) Object.assign(S.context, d.context);
     if (d.standing) S.standing = d.standing;
     if (d.pinnedFormation !== undefined) S.pinnedFormation = d.pinnedFormation;
+    if (d.tactics) S.tactics = d.tactics;
     if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
     if (d.match) Object.assign(S.match, d.match);
     S._baseCache = null; S._needsCache = null; S._trainCache = null;

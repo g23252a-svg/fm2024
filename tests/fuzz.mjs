@@ -255,6 +255,31 @@ for (const [label, opts] of CASES) {
       }
     }
 
+    /*
+     * 전술 슬롯 — 저장해 둔 포메이션 밖으로 나가면 안 됩니다.
+     * 나가는 순간 게임에서 전술 친숙도가 리셋되므로 따라 할 수 없는 조언이 됩니다.
+     */
+    try {
+      const slots = [pick(FD.FORMATIONS).id, pick(FD.FORMATIONS).id]
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .map((id, i) => ({ id: 't' + i, name: '슬롯' + i, formationId: id }));
+      const pk = E.pickTactic({
+        players: squad, tactics: slots,
+        opponent: { formationId: pick(FD.FORMATIONS).id, traits: [] },
+        context: { venue: 'home', odds: 'even', goal: 'win' }
+      });
+      if (pk) {
+        const ids = slots.map((t) => t.formationId);
+        if (!ids.includes(pk.result.xi.formation.id)) {
+          fail(`슬롯/${label}`, `저장하지 않은 포메이션을 골랐다: ${pk.result.xi.formation.id}`);
+        }
+        if (pk.ranking.length !== slots.length) fail(`슬롯/${label}`, '슬롯 수가 안 맞는다');
+        checkXI(`슬롯/${label}`, pk.result.xi);
+        checkStrings(`슬롯/${label}`, pk.note);
+        runs++;
+      }
+    } catch (e) { fail(`슬롯/${label}`, 'throw ' + e.message); }
+
     try {
       const needs = E.squadNeeds({ players: squad, standing: 'mid' });
       checkStrings(`영입/${label}`, needs.needs);
