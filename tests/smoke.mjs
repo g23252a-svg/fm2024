@@ -1841,6 +1841,34 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.ok(already.notes.some((n) => /상대를 밀착 마크/.test(n.text)),
     '지시를 뺐으면서 왜 뺐는지 남기지 않았다 — 사용자는 빠진 줄도 모른다');
 
+  /*
+   * 특성을 선수마다 손으로 켜는 것은 24명이면 그냥 노가다다. 그래서
+   * 스쿼드 보기에 「선수 특성」 열이 있으면 파일에서 그대로 읽는다.
+   * 한 칸에 여러 개가 쉼표로 들어온다.
+   */
+  assert.deepEqual([...IMP.parseTraits('안쪽으로 파고들기, 먼 거리에서 슛 시도')],
+    ['cuts-inside', 'shoots-distance']);
+  assert.deepEqual([...IMP.parseTraits('Cuts Inside From Both Wings; Hugs Line')],
+    ['cuts-inside', 'hugs-line']);
+  // 못 알아본 것은 버린다 — 지어내면 엉뚱한 특성이 켜져 역할이 통째로 달라진다
+  assert.equal(IMP.parseTraits('알 수 없는 특성, 이상한 것').length, 0);
+  assert.equal(IMP.parseTraits('-').length, 0);
+  assert.equal(IMP.parseTraits('').length, 0);
+  assert.equal(IMP.parseTraits(null).length, 0);
+
+  const withTraitCol = IMP.parseSquad(
+    'Name\tPosition\tAge\t선수 특성\n김선수\tM (C)\t24\t결정적인 패스 시도, 롱패스 시도');
+  assert.deepEqual([...withTraitCol.players[0].traits], ['killer-balls', 'long-passes']);
+  assert.equal(withTraitCol.players[0].age, 24);
+  assert.equal(withTraitCol.report.unknownColumns.length, 0,
+    '특성 열을 모르는 열로 보고했다');
+
+  // 특성 열이 없는 파일이 화면에서 켜 둔 특성을 지우면 안 된다
+  const hadTraits = [{ name: '김선수', positions: ['MC'], attrs: { pas: 15 }, traits: ['killer-balls'] }];
+  const merged2 = IMP.mergeSquad(hadTraits, [{ name: '김선수', positions: ['MC'], attrs: { tec: 14 } }]);
+  assert.deepEqual([...merged2.players[0].traits], ['killer-balls'],
+    '특성 열이 없는 파일을 넣었더니 켜 둔 특성이 지워졌다');
+
   // 특성이 없으면 아무것도 바뀌면 안 된다 (기존 사용자에게 영향이 없어야 한다)
   assert.equal(E.traitAdjust({ traits: [] }, RD.ROLES[0]).factor, 1);
   assert.equal(E.traitAdjust({}, RD.ROLES[0]).factor, 1);

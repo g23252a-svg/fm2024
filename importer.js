@@ -40,6 +40,13 @@
   reg('age', 'Age', '나이', '연령');
   reg('foot', 'Preferred Foot', '주발', '선호발', 'Foot', '주로 쓰는 발');
   reg('club', 'Club', '클럽', '소속팀');
+  /*
+   * 선수 특성. FM 기본 스쿼드 보기에는 없지만 보기 편집에 있으면 그대로 읽습니다.
+   * 한 칸에 여러 개가 쉼표나 줄바꿈으로 들어옵니다.
+   * 읽히면 손으로 켤 일이 없어지므로, 없더라도 등록만 해 둡니다.
+   */
+  reg('traits', 'Preferred Moves', 'Player Preferred Moves', 'PPM', 'Traits',
+    '선수 특성', '특성', '선호 플레이', '플레이 성향');
   // 컨디션은 부상이 아니라 피로도입니다 — 상대 선발의 약한 고리를 찾는 데 씁니다.
   reg('condition', 'Condition', '컨디션', 'Cond');
   // 부상·출장 정지 — 값이 있으면 지금 못 뛰는 선수로 봅니다.
@@ -177,6 +184,40 @@
     return clamp(n, 1, 20);
   }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  /*
+   * 특성 칸 읽기.
+   *
+   * "안쪽으로 파고들기, 먼 거리에서 슛 시도" 처럼 한 칸에 여러 개가 들어옵니다.
+   * 한국어·영문 이름을 모두 보고, 표기가 조금 달라도 붙도록 공백과 기호를
+   * 걷어내고 맞춥니다. 못 알아본 것은 조용히 버립니다 — 지어내면 엉뚱한 특성이
+   * 켜져서 역할 추천이 통째로 달라집니다.
+   */
+  var TRAIT_LOOKUP = null;
+  function traitLookup() {
+    if (TRAIT_LOOKUP) return TRAIT_LOOKUP;
+    TRAIT_LOOKUP = {};
+    var TD2 = root.FM_TRAIT_DATA;
+    if (!TD2) return TRAIT_LOOKUP;
+    TD2.TRAITS.forEach(function (t) {
+      TRAIT_LOOKUP[norm(t.ko)] = t.id;
+      TRAIT_LOOKUP[norm(t.en)] = t.id;
+      (t.aliases || []).forEach(function (a) { TRAIT_LOOKUP[norm(a)] = t.id; });
+    });
+    return TRAIT_LOOKUP;
+  }
+
+  function parseTraits(raw) {
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s || s === '-') return [];
+    var look = traitLookup();
+    var out = [];
+    s.split(/[,;\n\r·、]+/).forEach(function (part) {
+      var id = look[norm(part)];
+      if (id && out.indexOf(id) < 0) out.push(id);
+    });
+    return out;
+  }
 
   function parseFoot(raw) {
     if (!raw) return 'B';
@@ -500,6 +541,7 @@
         if (field === 'name') p.name = cleanName(raw);
         else if (field === 'position') p.positions = parsePositions(raw);
         else if (field === 'age') { var age = parseInt(raw, 10); if (isFinite(age)) p.age = age; }
+        else if (field === 'traits') { var tr = parseTraits(raw); if (tr.length) p.traits = tr; }
         else if (field === 'foot') p.foot = parseFoot(raw);
         else if (field === 'club') p.club = String(raw).trim();
         else if (field === 'condition') p.condition = String(raw).trim();
@@ -763,6 +805,8 @@
       if (p.foot && p.foot !== 'B') cur.foot = p.foot;
       if (p.age) cur.age = p.age;
       if (p.club) cur.club = p.club;
+      // 화면에서 켜 둔 특성을 빈 열이 지우면 안 됩니다.
+      if (p.traits && p.traits.length) cur.traits = p.traits;
       cur.attrCount = Object.keys(cur.attrs).filter(function (k) { return cur.attrs[k] > 0; }).length;
       updated++;
     });
@@ -796,6 +840,7 @@
     parsePositions: parsePositions,
     parseAttrValue: parseAttrValue,
     parseFoot: parseFoot,
+    parseTraits: parseTraits,
     rtfToText: rtfToText,
     parsePipeTable: parsePipeTable,
     parseHtmlTable: parseHtmlTable,
