@@ -2284,6 +2284,183 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(tallSp.weakDefence, null, '제공권이 좋은데 수비 경고가 나왔다');
 }
 
+// ── 프리킥 루틴 ───────────────────────────────────────────────────────────
+/*
+ * FM의 세트피스 편집기는 프리킥을 위치별로 따로 짜게 되어 있다. 중앙에서 직접
+ * 노리는 것, 측면에서 올리는 것, 하프라인에서 띄우는 것은 세울 사람도 노릴
+ * 자리도 다르다. 한 배치를 셋에 돌려 쓰면 셋 다 못 쓴다.
+ */
+{
+  const ATTR_IDS3 = new Set(Object.keys(RD.ATTRS));
+  const FM_ROLES = new Set(SD.FM_ROLE_NAMES);
+  // 목록 자체가 늘어나기만 하고 안 쓰이면 지어낸 이름이 섞여도 모른다
+  const usedFm = new Set([...SD.ROUTINES.flatMap((r) => r.slots), ...SD.SPECIALISTS].map((s) => s.fm));
+  for (const n of SD.FM_ROLE_NAMES) {
+    assert.ok(usedFm.has(n), `FM 자리 이름 「${n}」이 어디에도 안 쓰인다 — 목록에서 빼거나 루틴에 쓰라`);
+  }
+
+  assert.ok(SD.ROUTINES.length >= 7, `루틴이 ${SD.ROUTINES.length}개뿐이다`);
+  const ids = SD.ROUTINES.map((r) => r.id);
+  assert.equal(new Set(ids).size, ids.length, `루틴 id가 겹친다: ${ids.join(', ')}`);
+  for (const want of ['att-corner', 'def-corner', 'att-fk-central', 'att-fk-wide',
+                      'att-fk-deep', 'def-fk-central', 'def-fk-wide']) {
+    assert.ok(ids.includes(want), `루틴 ${want}가 없다`);
+  }
+
+  for (const r of SD.ROUTINES) {
+    assert.ok(r.ko && r.fm && r.when && r.desc, `루틴 ${r.id}에 설명이 빠졌다`);
+    assert.ok(['att', 'def'].includes(r.side), `루틴 ${r.id}의 side가 이상하다`);
+    assert.ok(r.slots.length >= 4, `루틴 ${r.id}에 자리가 ${r.slots.length}개뿐이다`);
+    // 자리 이름은 코너와 같은 목록이어야 한다. 새 영문 이름을 지어내면 화면에서 못 찾는다.
+    for (const s of r.slots) {
+      assert.ok(FM_ROLES.has(s.fm), `${r.id}의 「${s.ko}」에 코너에 없는 FM 이름을 썼다: ${s.fm}`);
+      assert.ok(s.why && s.why.length > 10, `${r.id}/${s.id}에 이유가 없다`);
+      for (const a of Object.keys(s.weight)) {
+        assert.ok(ATTR_IDS3.has(a), `${r.id}/${s.id}의 알 수 없는 능력치 ${a}`);
+      }
+      for (const a of Object.keys(s.need || {})) {
+        assert.ok(ATTR_IDS3.has(a), `${r.id}/${s.id}의 알 수 없는 최소 기준 ${a}`);
+        assert.ok(Object.keys(s.weight).includes(a),
+          `${r.id}/${s.id}의 최소 기준 ${a}가 가중치에 없다`);
+      }
+    }
+    // 한 루틴에 11명 넘게 세울 수 없다 (골키퍼를 빼면 10명)
+    const total = r.slots.reduce((n, s) => n + (s.count || 1), 0);
+    assert.ok(total <= 10, `${r.id}에 ${total}명을 세우려 한다 — 필드 선수는 10명이다`);
+  }
+
+  const base2 = E.baseTactic({ players: squad, standing: 'mid' });
+  const sp2 = E.setPieces(base2.xi);
+  assert.equal(sp2.routines.length, SD.ROUTINES.length, '루틴 일부를 계산하지 않았다');
+
+  const gk2 = base2.xi.lineup.find((l) => l.slot.pos === 'GK');
+  for (const r of sp2.routines) {
+    const names = r.slots.flatMap((s) => s.picks).map((p) => p.name);
+    // 한 상황에서 한 사람이 두 자리를 맡을 수 없다
+    assert.equal(new Set(names).size, names.length,
+      `${r.ko}에서 같은 선수가 두 자리를 맡았다: ${names.join(', ')}`);
+    assert.ok(!names.includes(gk2.player.name), `${r.ko}에 골키퍼를 세웠다`);
+    assert.ok(names.length <= 10, `${r.ko}에 ${names.length}명을 세웠다`);
+    for (const n of r.notes) {
+      assert.ok(['high', 'note', 'good'].includes(n.level), `${r.id}의 알 수 없는 등급 ${n.level}`);
+      assert.ok(!/NaN|undefined|\[object |[은는이가을를와과]\([은는이가을를와과]\)/.test(n.text + n.fix),
+        `${r.id}의 진단에 이상한 값이 있다: ${n.text} / ${n.fix}`);
+    }
+  }
+
+  // 코너 결과는 예전 이름으로도 그대로 나와야 한다 (화면과 복사 텍스트가 쓴다)
+  const attRoutine = sp2.routines.find((r) => r.id === 'att-corner');
+  assert.equal(sp2.attack.length, attRoutine.slots.length);
+  assert.deepEqual(sp2.attack.map((s) => s.picks.map((p) => p.name).join()),
+    attRoutine.slots.map((s) => s.picks.map((p) => p.name).join()));
+
+  /*
+   * 상황이 다르면 배치도 달라야 한다. 같은 명단이 그대로 복사돼 나오면
+   * 루틴을 나눈 의미가 없다.
+   */
+  const central = sp2.routines.find((r) => r.id === 'att-fk-central');
+  const deep = sp2.routines.find((r) => r.id === 'att-fk-deep');
+  const backOf = (r) => (r.slots.find((s) => s.id === 'stay') || { picks: [] }).picks.length;
+  assert.ok(backOf(deep) > backOf(attRoutine),
+    `깊은 프리킥에서 뒤에 남기는 인원이 코너보다 많지 않다: ${backOf(deep)} vs ${backOf(attRoutine)}`);
+
+  /*
+   * 직접 슛이 되는 선수가 없으면 조용히 아무나 세우지 말고, 루틴 자체를
+   * 바꾸라고 말해야 한다.
+   */
+  const noFk = squad.map((p) => ({ ...p, attrs: { ...p.attrs, fre: 6 } }));
+  const noFkSp = E.setPieces(E.baseTactic({ players: noFk, standing: 'mid' }).xi);
+  const noFkCentral = noFkSp.routines.find((r) => r.id === 'att-fk-central');
+  assert.equal((noFkCentral.slots.find((s) => s.id === 'fk-taker') || {}).picks.length, 0,
+    '프리킥 6짜리를 직접 슈팅 자리에 세웠다');
+  const bail = noFkCentral.notes.find((n) => n.level === 'high');
+  assert.ok(bail, '직접 슛이 안 되는데 아무 말도 안 했다');
+  assert.ok(/크로스|측면/.test(bail.fix), `대안을 말하지 않았다: ${bail.fix}`);
+
+  /*
+   * 「전담 키커」와 루틴이 서로 다른 선수를 지목하면 어느 쪽을 따라야 할지 알 수
+   * 없다. 스쿼드에 따라 우연히 같아질 수 있으므로 뽑힌 이름이 아니라 기준
+   * 자체를 맞춰 둔다 — 한쪽 가중치만 고치면 여기서 걸린다.
+   */
+  const specOf = (id) => SD.SPECIALISTS.find((s) => s.id === id);
+  const slotOf = (rid, sid) => SD.ROUTINES.find((r) => r.id === rid).slots.find((s) => s.id === sid);
+  for (const [rid, sid, specId, label] of [
+    ['att-fk-central', 'fk-taker', 'fk-direct', '중앙 프리킥'],
+    ['att-fk-wide', 'fk-taker', 'fk-wide', '측면 프리킥']
+  ]) {
+    assert.deepEqual(slotOf(rid, sid).weight, specOf(specId).weight,
+      `${label} 키커의 가중치가 전담 키커와 다르다 — 두 화면이 다른 선수를 지목하게 된다`);
+    assert.deepEqual(slotOf(rid, sid).need, specOf(specId).need,
+      `${label} 키커의 최소 기준이 전담 키커와 다르다`);
+  }
+  // 실제 결과도 같아야 한다
+  const pickName = (rows, id) => {
+    const s = rows.find((x) => x.id === id);
+    return s && s.picks[0] ? s.picks[0].name : null;
+  };
+  const wide2 = sp2.routines.find((r) => r.id === 'att-fk-wide');
+  assert.equal(pickName(central.slots, 'fk-taker'), pickName(sp2.specialists, 'fk-direct'),
+    '중앙 프리킥 키커와 전담 키커의 직접 프리킥이 다른 사람이다');
+  assert.equal(pickName(wide2.slots, 'fk-taker'), pickName(sp2.specialists, 'fk-wide'),
+    '측면 프리킥 키커와 전담 키커의 측면 프리킥이 다른 사람이다');
+  assert.equal(pickName(attRoutine.slots, 'taker'), pickName(sp2.attack, 'taker'),
+    '코너 키커가 두 곳에서 다르다');
+
+  // 반대로 특급 키커가 있으면 그것도 말해야 한다
+  const acePlayers = squad.map((p, i) => (i === 3 ? { ...p, name: '프리킥 특급', attrs: { ...p.attrs, fre: 18, tec: 16, cmp: 15 } } : p));
+  const aceSp = E.setPieces(E.baseTactic({ players: acePlayers, standing: 'mid' }).xi);
+  const aceCentral = aceSp.routines.find((r) => r.id === 'att-fk-central');
+  assert.ok(aceCentral.notes.some((n) => n.level === 'good' && /프리킥 특급/.test(n.text)),
+    '프리킥 18인 선수를 두고도 아무 말이 없다');
+
+  /*
+   * 측면 프리킥도 키커의 발에 따라 인/아웃스윙이 갈린다 — 코너에만 있던
+   * 판단이 프리킥에는 없으면 반대쪽 포스트를 노리게 된다.
+   */
+  const lw = { ...squad[0], name: '왼발 크로서', foot: 'L', attrs: { ...squad[0].attrs, cro: 18, fre: 16, tec: 15, vis: 15 } };
+  const wideSp = E.setPieces({
+    formation: { id: 'z', ko: '검사용' },
+    lineup: base2.xi.lineup.map((l, i) => (i === 1 ? { ...l, player: lw } : l))
+  });
+  assert.equal(wideSp.fkSwing.length, 2, '측면 프리킥 스윙을 양쪽 다 말하지 않았다');
+  assert.equal(wideSp.fkSwing.find((s) => s.side === 'r').kind, 'in',
+    '왼발잡이의 오른쪽 측면 프리킥을 인스윙으로 안 봤다');
+  const wideRoutine = wideSp.routines.find((r) => r.id === 'att-fk-wide');
+  assert.ok(wideRoutine.notes.some((n) => /인스윙|아웃스윙/.test(n.text)),
+    '측면 프리킥 루틴에 스윙 안내가 안 붙었다');
+  // 코너 안내와 섞이면 안 된다
+  assert.ok(wideRoutine.notes.every((n) => !/코너/.test(n.text)),
+    '측면 프리킥 안내에 코너 이야기가 섞였다');
+
+  // 발을 모르면 프리킥에서도 스윙을 단정하지 않는다
+  const noFootWide = E.setPieces({
+    formation: { id: 'z', ko: '검사용' },
+    lineup: base2.xi.lineup.map((l, i) => (i === 1 ? { ...l, player: { ...lw, foot: undefined } } : l))
+  });
+  assert.equal(noFootWide.fkSwing.length, 0, '발을 모르는데 프리킥 스윙을 단정했다');
+
+  // 능력치가 하나도 없으면 루틴도 비어 있어야 한다
+  const blank2 = E.setPieces({
+    formation: { id: 'z', ko: '검사용' },
+    lineup: base2.xi.lineup.map((l) => ({ ...l, player: { name: l.player.name, attrs: {} } }))
+  });
+  for (const r of blank2.routines) {
+    assert.equal(r.slots.flatMap((s) => s.picks).length, 0,
+      `${r.ko}: 능력치를 모르는데 자리를 채웠다`);
+  }
+
+  // 느린 스쿼드에는 앞에 남기라고 하지 않는다
+  const slow = squad.map((p) => ({ ...p, attrs: { ...p.attrs, pac: 7, acc: 7 } }));
+  const slowSp = E.setPieces(E.baseTactic({ players: slow, standing: 'mid' }).xi);
+  for (const id of ['def-fk-central', 'def-fk-wide', 'def-corner']) {
+    const r = slowSp.routines.find((x) => x.id === id);
+    assert.equal((r.slots.find((s) => s.id === 'outlet') || {}).picks.length, 0,
+      `${r.ko}: 속도 7짜리를 앞에 남겼다`);
+    assert.ok(r.notes.some((n) => /앞에 남길/.test(n.text)),
+      `${r.ko}: 앞에 남길 사람이 없는데 아무 말도 안 했다`);
+  }
+}
+
 // ── 축 값이 라벨 범위를 벗어나지 않는다 ───────────────────────────────────
 {
   const extremes = [

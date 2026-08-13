@@ -140,7 +140,23 @@ function checkSetPieces(tag, xi) {
     }
     if (gk && gk.player && names.includes(gk.player.name)) fail(tag, '골키퍼를 코너 자리에 세웠다');
   }
-  for (const s of [...sp.attack, ...sp.defence, ...sp.specialists]) {
+  /*
+   * 루틴은 상황마다 따로 짭니다. 어느 상황에서든 같은 사람을 두 자리에 세우거나
+   * 골키퍼를 올려 보내면 화면에 그대로 나가는 조언이 됩니다.
+   */
+  for (const r of sp.routines || []) {
+    const names = r.slots.flatMap((s) => s.picks).map((p) => p.name);
+    if (new Set(names).size !== names.length) {
+      fail(tag, `${r.ko}에서 같은 선수가 두 자리를 맡았다: ${names.join(', ')}`);
+    }
+    if (gk && gk.player && names.includes(gk.player.name)) fail(tag, `${r.ko}에 골키퍼를 세웠다`);
+    if (names.length > 10) fail(tag, `${r.ko}에 ${names.length}명을 세웠다`);
+    checkStrings(tag, r.notes.map((n) => n.text + ' ' + n.fix));
+  }
+  checkStrings(tag, (sp.fkSwing || []).map((s) => s.text + ' ' + s.fix));
+
+  const everySlot = [...(sp.routines || []).flatMap((r) => r.slots), ...sp.specialists];
+  for (const s of everySlot) {
     if (!s.need) continue;
     for (const p of s.picks) {
       const l = xi.lineup.find((x) => x.player && x.player.name === p.name);

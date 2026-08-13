@@ -2819,11 +2819,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       .some(function (s) { return s.picks.length; });
     if (!anyPick) return null;
 
-    function group(title, desc, rows) {
-      var box = h('div', { style: 'margin-top:12px' }, [
-        h('div', { style: 'font-size:12px;font-weight:800;margin-bottom:3px', text: title }),
-        h('div', { class: 'tiny muted', style: 'margin-bottom:7px', text: desc })
-      ]);
+    function slotRows(box, rows) {
       rows.forEach(function (s) {
         var val = s.picks.length
           ? s.picks.map(function (p) { return p.name; }).join(', ')
@@ -2855,6 +2851,45 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ]);
     }
 
+    function noteLine(n) {
+      return line('warn' + (n.level === 'high' ? ' high' : ''),
+        n.level === 'high' ? '!' : n.level === 'good' ? '★' : '·', n.text, n.fix);
+    }
+
+    /*
+     * 루틴 하나를 접이식으로 냅니다.
+     *
+     * 코너 둘 + 프리킥 다섯이라 다 펼쳐 두면 카드가 화면 세 개 길이가 됩니다.
+     * 접어 두되 요약 줄에 키커와 경고 개수를 넣어, 열지 않고도 무엇이 문제인지
+     * 보이게 합니다.
+     */
+    function routineBox(r) {
+      var lead = r.slots.filter(function (s) { return s.picks.length; })[0];
+      var bad = r.notes.filter(function (n) { return n.level === 'high'; }).length;
+      var box = rememberOpen('sp:' + r.id, h('details', { class: 'help', style: 'margin-top:9px' }));
+      box.appendChild(h('summary', {}, [
+        h('span', { style: 'font-weight:800', text: r.ko }),
+        bad ? h('span', { class: 'tiny', style: 'color:var(--danger);font-weight:800', text: '  ! ' + bad }) : null,
+        h('div', { class: 'tiny muted', text: r.when }),
+        h('div', { style: 'font-size:12.5px', text: lead ? lead.ko + ' — ' + lead.picks.map(function (p) { return p.name; }).join(', ') : '배치할 선수가 없습니다' })
+      ]));
+      var body = h('div', { class: 'body' }, [
+        h('div', { class: 'tiny muted', style: 'margin-bottom:6px', text: r.desc })
+      ]);
+      r.notes.forEach(function (n) { body.appendChild(noteLine(n)); });
+      slotRows(body, r.slots);
+      box.appendChild(body);
+      return box;
+    }
+
+    function group(title, desc, rows) {
+      var box = h('div', { style: 'margin-top:12px' }, [
+        h('div', { style: 'font-size:12px;font-weight:800;margin-bottom:3px', text: title }),
+        h('div', { class: 'tiny muted', style: 'margin-bottom:7px', text: desc })
+      ]);
+      return slotRows(box, rows);
+    }
+
     var card = h('details', { class: 'card' });
     card.appendChild(h('summary', { style: 'cursor:pointer' }, [
       h('span', { style: 'font-size:15px;font-weight:800', text: '세트피스' }),
@@ -2871,9 +2906,22 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     sp.swing.forEach(function (s) { card.appendChild(line('warn', '·', s.text, s.fix)); });
     if (sp.weakDefence) card.appendChild(line('warn high', '!', sp.weakDefence.text, sp.weakDefence.fix));
 
-    card.appendChild(group('공격 코너', '박스 안 셋 + 가장자리 하나 + 뒤 둘. 한 사람이 두 자리를 겸하지 않습니다.', sp.attack));
-    card.appendChild(group('수비 코너', '맨마킹 셋에 니어 포스트·가장자리·앞에 남길 한 명씩.', sp.defence));
-    card.appendChild(group('프리킥 · 페널티 · 스로인', '이쪽은 같은 선수가 여러 개를 겸해도 됩니다.', sp.specialists));
+    /*
+     * 상황별 루틴 — 공격 넷, 수비 셋.
+     *
+     * FM의 세트피스 편집기가 상황마다 따로 짜게 되어 있으므로 화면도 그렇게
+     * 나눕니다. 하나로 뭉쳐 두면 어느 배치를 어디에 넣어야 하는지 알 수 없습니다.
+     */
+    [['공격 상황', 'att'], ['수비 상황', 'def']].forEach(function (g) {
+      var rs = (sp.routines || []).filter(function (r) { return r.side === g[1]; });
+      if (!rs.length) return;
+      card.appendChild(h('div', { style: 'font-size:12px;font-weight:800;margin:14px 0 2px', text: g[0] }));
+      rs.forEach(function (r) { card.appendChild(routineBox(r)); });
+    });
+
+    card.appendChild(group('전담 키커',
+      'FM의 「전담 키커」 화면에 넣는 값입니다(위 루틴은 그 사람이 찬 뒤 나머지 열 명이 어디 서는지입니다). 여기는 한 사람이 여러 개를 겸해도 됩니다.',
+      sp.specialists));
 
     if (sp.known < 6) {
       card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:9px',
@@ -3117,7 +3165,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     var sp;
     try { sp = E.setPieces(xi); } catch (e) { return; }
     if (!sp) return;
-    var rows = [['공격 코너', sp.attack], ['수비 코너', sp.defence], ['프리킥·페널티·스로인', sp.specialists]];
+    var rows = (sp.routines || []).map(function (r) { return [r.ko, r.slots, r.notes]; })
+      .concat([['전담 키커', sp.specialists, []]]);
     if (!rows.some(function (r) { return r[1].some(function (x) { return x.picks.length; }); })) return;
     L.push('');
     L.push('[세트피스]');
@@ -3126,6 +3175,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (sp.weakDefence) L.push('  ! ' + sp.weakDefence.text);
     rows.forEach(function (r) {
       L.push('  · ' + r[0]);
+      (r[2] || []).forEach(function (n) { L.push('      ※ ' + n.text + (n.fix ? ' → ' + n.fix : '')); });
       r[1].forEach(function (x) {
         L.push('      ' + x.ko + ' (' + x.fm + '): '
           + (x.picks.length ? x.picks.map(function (p) { return p.name; }).join(', ') : '조건을 넘는 선수 없음'));

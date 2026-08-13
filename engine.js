@@ -2269,10 +2269,14 @@
     // 값을 아는 항목이 절반도 안 되면 판단하지 않습니다.
     if (seen < Math.ceil(Object.keys(spec.weight).length / 2)) return null;
     var score = (sum / wsum);
-    // 「감아 차기」 같은 특성은 같은 능력치라면 이 선수를 키커로 만듭니다.
-    var key = spec.id === 'taker' ? 'corner'
-      : spec.id === 'fk-direct' ? 'fkDirect'
-        : spec.id === 'fk-wide' ? 'fkDirect' : null;
+    /*
+     * 「감아 차기」 같은 특성은 같은 능력치라면 이 선수를 키커로 만듭니다.
+     * 자리 id는 루틴마다 겹치므로 FM 자리 이름으로 판단합니다 — 프리킥 루틴이
+     * 늘어날 때마다 여기에 id를 하나씩 더 적는 방식은 반드시 빠뜨립니다.
+     */
+    var key = spec.fm === 'Corner Taker' ? 'corner'
+      : (spec.fm === 'Take Free Kick' || spec.fm === 'Free Kick Taker' || spec.fm === 'Wide Free Kick')
+        ? 'fkDirect' : null;
     if (key) {
       ((player && player.traits) || []).forEach(function (id) {
         var t = traitById(id);
@@ -2318,21 +2322,22 @@
    * 같은 발이면 골문에서 멀어지며 나갑니다(아웃스윙). 둘은 노려야 할 자리가
    * 다르므로, 발을 알면 여기까지 말해 줘야 배치가 맞물립니다.
    */
-  function swingNote(taker, side) {
+  function swingNote(taker, side, what) {
     if (!taker) return null;
     var foot = taker.foot;
     if (foot !== 'L' && foot !== 'R') return null;
     var sideKo = side === 'r' ? '오른쪽' : '왼쪽';
+    var label = what || '코너';
     var inswing = (side === 'r' && foot === 'L') || (side === 'l' && foot === 'R');
     return inswing
       ? {
         side: side, kind: 'in',
-        text: sideKo + ' 코너는 ' + (foot === 'L' ? '왼발' : '오른발') + '잡이가 차면 인스윙입니다 — 공이 골문 쪽으로 감겨 들어옵니다.',
+        text: sideKo + ' ' + label + eun(label) + ' ' + (foot === 'L' ? '왼발' : '오른발') + '잡이가 차면 인스윙입니다 — 공이 골문 쪽으로 감겨 들어옵니다.',
         fix: '니어 포스트로 달려드는 선수와 골키퍼 방해를 살리세요. 공이 이미 골문으로 오므로 먼저 닿기만 하면 됩니다.'
       }
       : {
         side: side, kind: 'out',
-        text: sideKo + ' 코너는 ' + (foot === 'L' ? '왼발' : '오른발') + '잡이가 차면 아웃스윙입니다 — 공이 골문에서 멀어지며 나옵니다.',
+        text: sideKo + ' ' + label + eun(label) + ' ' + (foot === 'L' ? '왼발' : '오른발') + '잡이가 차면 아웃스윙입니다 — 공이 골문에서 멀어지며 나옵니다.',
         fix: '파 포스트로 달려드는 선수와 박스 가장자리 대기를 살리세요. 골키퍼가 나와서 잡기 어려운 궤적입니다.'
       };
   }
@@ -2344,8 +2349,27 @@
     var outfield = xi.lineup.filter(function (l) { return l.slot.pos !== 'GK' && l.player; });
     var all = xi.lineup.filter(function (l) { return l.player; });
 
-    var attack = assignSetPiece(SP.ATT_CORNER, outfield);
-    var defence = assignSetPiece(SP.DEF_CORNER, outfield);
+    /*
+     * 루틴별로 따로 배치합니다.
+     *
+     * 상황이 다르면 세울 사람도 다릅니다 — 중앙 프리킥의 키커와 측면 프리킥의
+     * 키커는 요구하는 능력치가 아예 다르고, 깊은 프리킥에서는 뒤에 남길 인원이
+     * 두 배입니다. 한 배치를 모든 프리킥에 돌려 쓰면 셋 다 어중간해집니다.
+     */
+    var routines = (SP.ROUTINES || []).map(function (r) {
+      return {
+        id: r.id, side: r.side, kind: r.kind, ko: r.ko, fm: r.fm,
+        when: r.when, desc: r.desc,
+        slots: assignSetPiece(r.slots, outfield),
+        notes: []
+      };
+    });
+    var byRoutine = {};
+    routines.forEach(function (r) { byRoutine[r.id] = r; });
+
+    // 예전 이름 — 화면과 검사가 코너를 이 이름으로 씁니다.
+    var attack = byRoutine['att-corner'] ? byRoutine['att-corner'].slots : assignSetPiece(SP.ATT_CORNER, outfield);
+    var defence = byRoutine['def-corner'] ? byRoutine['def-corner'].slots : assignSetPiece(SP.DEF_CORNER, outfield);
     // 전문 키커는 서로 겸할 수 있습니다 — FM에서도 같은 선수가 프리킥과 페널티를
     // 함께 차는 것이 보통입니다. 그래서 자리를 나눠 갖지 않고 각각 최고를 뽑습니다.
     var specialists = SP.SPECIALISTS.map(function (spec) {
@@ -2362,9 +2386,25 @@
       };
     });
 
+    function playerNamed(name) {
+      if (!name) return null;
+      var hit = all.filter(function (l) { return l.player.name === name; })[0];
+      return hit ? hit.player : null;
+    }
+    // 어떤 루틴에서 어느 자리를 누가 맡았는지 — 아래 진단이 전부 여기서 나옵니다.
+    function pickOf(routineId, slotId, n) {
+      var r = byRoutine[routineId];
+      if (!r) return null;
+      var s = r.slots.filter(function (x) { return x.id === slotId; })[0];
+      return (s && s.picks[n || 0]) || null;
+    }
+    function playerAt(routineId, slotId, n) {
+      var p = pickOf(routineId, slotId, n);
+      return p ? playerNamed(p.name) : null;
+    }
+
     // 코너 키커의 발 — 인스윙/아웃스윙 판단
-    var takerName = (attack[0] && attack[0].picks[0]) ? attack[0].picks[0].name : null;
-    var taker = takerName ? (all.filter(function (l) { return l.player.name === takerName; })[0] || {}).player : null;
+    var taker = playerAt('att-corner', 'taker');
     var swing = [swingNote(taker, 'l'), swingNote(taker, 'r')].filter(Boolean);
 
     /*
@@ -2418,8 +2458,94 @@
       }
     }
 
+    /*
+     * ── 루틴별 진단 ───────────────────────────────────────────────────────
+     *
+     * 배치만 내놓으면 "이대로 두면 되나"를 알 수 없습니다. 프리킥은 특히
+     * 그렇습니다 — 직접 슛이 되는 선수가 없으면 중앙 루틴 자체를 크로스로
+     * 바꿔야 하고, 키커의 발에 따라 노려야 할 포스트가 반대가 됩니다.
+     * 배치와 같은 자리에 그 판단을 붙입니다.
+     */
+    function note(routineId, level, text, fix) {
+      var r = byRoutine[routineId];
+      if (r) r.notes.push({ level: level, text: text, fix: fix || '' });
+    }
+    function footKo(p) { return p && p.foot === 'L' ? '왼발' : p && p.foot === 'R' ? '오른발' : null; }
+
+    // 공격 프리킥 · 중앙 — 직접 노릴 사람이 있는가
+    var fkTaker = playerAt('att-fk-central', 'fk-taker');
+    var fkPick = pickOf('att-fk-central', 'fk-taker');
+    var fkSecond = playerAt('att-fk-central', 'fk-second');
+    var bestFre = null;
+    outfield.forEach(function (l) {
+      var v = l.player.attrs && l.player.attrs.fre;
+      if (typeof v === 'number' && v > 0 && (bestFre === null || v > bestFre)) bestFre = v;
+    });
+    if (!fkPick) {
+      note('att-fk-central', 'high',
+        bestFre === null
+          ? '프리킥 능력치를 아는 선발이 없어 직접 슈팅 자리를 못 정했습니다.'
+          : '선발 중 프리킥 12를 넘는 선수가 없습니다(가장 높은 값 ' + bestFre + ') — 직접 노리면 대부분 벽에 맞습니다.',
+        '중앙에서도 「공격 프리킥 · 측면」의 크로스 배치를 그대로 쓰세요. 박스 안에 사람을 넣는 편이 훨씬 낫습니다.');
+    } else if (bestFre !== null && bestFre >= 15) {
+      note('att-fk-central', 'good',
+        fkPick.name + '의 프리킥이 ' + bestFre + '입니다 — 이 선수의 프리킥 자체가 득점 경로입니다.',
+        '파울을 얻는 위치를 만드세요. 측면 자원에게 「안쪽으로 접어 들어가기」를 주면 골문 앞에서 파울이 늘어납니다.');
+    }
+    if (fkTaker && fkSecond) {
+      var f1 = footKo(fkTaker), f2 = footKo(fkSecond);
+      if (f1 && f2 && f1 !== f2) {
+        note('att-fk-central', 'good',
+          '공 위의 두 명이 서로 다른 발입니다(' + fkPick.name + ' ' + f1 + ' / ' + pickOf('att-fk-central', 'fk-second').name + ' ' + f2 + ') — 상대가 벽 위치와 골키퍼 자리를 미리 못 정합니다.', '');
+      } else if (f1 && f2) {
+        note('att-fk-central', 'note',
+          '공 위의 두 명이 같은 발입니다(둘 다 ' + f1 + ') — 상대 골키퍼가 한쪽만 보면 됩니다.',
+          '반대발 선수를 한 명 세우면 같은 배치로 효과가 커집니다.');
+      }
+    }
+
+    // 공격 프리킥 · 측면 — 키커의 발이 노릴 포스트를 정합니다
+    var wideTaker = playerAt('att-fk-wide', 'fk-taker');
+    var fkSwing = [swingNote(wideTaker, 'l', '측면 프리킥'), swingNote(wideTaker, 'r', '측면 프리킥')].filter(Boolean);
+    fkSwing.forEach(function (s) { note('att-fk-wide', 'note', s.text, s.fix); });
+    if (verdict && verdict.level === 'poor') {
+      note('att-fk-wide', 'high',
+        '박스 안 제공권이 약해(평균 ' + verdict.mean + ') 올려도 상대가 걷어냅니다.',
+        '「짧은 패스 옵션」을 살려 짧게 연결하고, 박스 안 인원 하나를 박스 가장자리로 빼세요.');
+      note('att-fk-deep', 'high',
+        '깊은 위치에서 그냥 띄우면 이 스쿼드로는 경합에서 거의 못 이깁니다.',
+        '짧게 연결해 공을 지키고 다시 만드세요. 여기서 뺏기면 그대로 역습입니다.');
+    }
+
+    // 수비 — 앞에 남길 사람이 없으면 배치가 통째로 달라집니다
+    ['def-fk-central', 'def-fk-wide', 'def-corner'].forEach(function (id) {
+      if (!byRoutine[id]) return;
+      if (pickOf(id, 'outlet')) return;
+      note(id, 'note',
+        '앞에 남길 만큼 발 빠른 선수가 없습니다(속도 12 이상).',
+        '전원 내려서 막고 세컨볼만 노리세요. 느린 선수를 앞에 남기면 그냥 한 명을 버리는 것입니다.');
+    });
+    if (weakDef) {
+      note('def-fk-wide', 'high', weakDef.text, weakDef.fix);
+    }
+
+    // 자리를 채울 사람이 없으면 그 자리는 조용히 비는 대신 이유를 말합니다.
+    routines.forEach(function (r) {
+      var empty = r.slots.filter(function (s) {
+        return !s.picks.length && s.need;
+      });
+      if (!empty.length) return;
+      r.notes.push({
+        level: 'note',
+        text: empty.map(function (s) { return '「' + s.ko + '」'; }).join(', ')
+          + ' 자리는 최소 기준을 넘는 선수가 없어 비워 뒀습니다.',
+        fix: '기준에 못 미치는 선수를 세우면 조언이 아니라 방해가 됩니다. 그 자리는 FM 기본값으로 두세요.'
+      });
+    });
+
     return {
       attack: attack, defence: defence, specialists: specialists,
+      routines: routines, fkSwing: fkSwing,
       swing: swing, verdict: verdict, weakDefence: weakDef,
       known: known, boxMean: boxMean
     };

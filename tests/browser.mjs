@@ -560,7 +560,63 @@ await test('슬롯 친숙도를 넣으면 안 익은 전술 대신 몸에 밴 �
   await page.close();
 });
 
-// ── 10. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 10. 프리킥 루틴 ───────────────────────────────────────────────────────
+/*
+ * FM은 프리킥을 위치별로 따로 짜게 되어 있다. 화면에도 상황별로 나뉘어 나와야
+ * 하고, 카드를 다시 그릴 때 열어 둔 루틴이 접히면 눌러 볼 수가 없다.
+ */
+await test('프리킥 루틴이 상황별로 나오고, 열어 두면 접히지 않는다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  await withPositions(page);
+
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(1800);
+  const sp = page.locator('#tab-base details.card').filter({ hasText: '세트피스' }).first();
+  assert.equal(await sp.count(), 1, '세트피스 카드가 없다');
+  await sp.locator('summary').first().click();
+  await page.waitForTimeout(500);
+
+  const text = await sp.innerText();
+  for (const want of ['공격 프리킥 · 중앙', '공격 프리킥 · 측면', '공격 프리킥 · 깊은 위치',
+                      '수비 프리킥 · 중앙', '수비 프리킥 · 측면', '공격 코너', '수비 코너']) {
+    assert.ok(text.includes(want), `${want} 루틴이 화면에 없다`);
+  }
+  assert.ok(!/NaN|undefined|\[object/.test(text), '세트피스 카드에 이상한 값이 있다');
+
+  // 루틴 하나를 열면 자리와 이유가 나온다
+  const central = sp.locator('details.help').filter({ hasText: '공격 프리킥 · 중앙' }).first();
+  await central.locator('summary').first().click();
+  await page.waitForTimeout(400);
+  const ct = await central.innerText();
+  assert.ok(/직접 슈팅/.test(ct), '중앙 프리킥에 직접 슈팅 자리가 없다');
+  assert.ok(/뒤에 남기기/.test(ct), '중앙 프리킥에 뒤에 남기는 자리가 없다');
+  assert.ok(/Take Free Kick/.test(ct), 'FM 영문 자리 이름이 없다');
+
+  // 다시 그려도 열어 둔 채로 있어야 한다 (상대를 바꾸면 카드가 새로 그려진다)
+  await tab(page, '상대');
+  await page.waitForTimeout(600);
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(1500);
+  const central2 = page.locator('#tab-base details.help').filter({ hasText: '공격 프리킥 · 중앙' }).first();
+  assert.equal(await central2.evaluate((el) => el.open), true, '다시 그리자 루틴이 접혔다');
+
+  // 복사한 글에도 루틴이 통째로 들어가야 한다
+  await page.locator('#tab-base button', { hasText: '전술 텍스트로 복사' }).first().click();
+  await page.waitForTimeout(600);
+  const copied = await page.evaluate(() => navigator.clipboard.readText().catch(() => ''));
+  if (copied) {
+    assert.ok(/공격 프리킥 · 중앙/.test(copied), `복사한 글에 프리킥 루틴이 없다: ${copied.slice(0, 200)}`);
+    assert.ok(!/NaN|undefined|\[object/.test(copied), '복사한 글에 이상한 값이 있다');
+  }
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 11. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });
