@@ -336,7 +336,81 @@ await test('「전체 채우기」는 실제 능력치를 덮기 전에 물어�
   await page.close();
 });
 
-// ── 7. 좁은 화면에서 가로로 넘치지 않는다 ─────────────────────────────────
+// ── 7. 영입 탭 ────────────────────────────────────────────────────────────
+/*
+ * 포지션이 없는 스쿼드에서 영입 탭이 열한 자리를 전부 「급함」으로 내놓았다.
+ * 이미 있는 골키퍼를 두고 "골키퍼 자리에 등록된 선수가 없다"고 말한 것이라,
+ * 틀린 조언을 확신 있게 하는 쪽이었다. 그럴 때는 목록 대신 사실을 내야 한다.
+ */
+await test('포지션을 모르면 영입 목록 대신 무엇을 고칠지 말한다', async () => {
+  const page = await openPage();
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);          // 이 픽스처에는 포지션 열이 없다
+  await tab(page, '영입');
+  await page.waitForTimeout(1200);
+  const t = await page.locator('#tab-transfer').innerText();
+  assert.ok(/영입 제안을 낼 수 없습니다/.test(t), '포지션이 없는데 영입 목록을 냈다');
+  assert.ok(/포지션.*열/.test(t), '무엇을 하면 되는지가 없다');
+  assert.equal(await page.locator('#tab-transfer .card').filter({ hasText: '찾을 유형' }).count(), 0,
+    '포지션을 모르는데 영입 유형을 지어냈다');
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+await test('포지션이 있으면 자리별 영입 유형과 스카우트 조건이 나온다', async () => {
+  const page = await openPage();
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    const map = {
+      'Guglielmo Vicario': ['GK'], 'Brandon Austin': ['GK'],
+      'Pedro Porro': ['DR', 'WBR'], 'Destiny Udogie': ['DL', 'WBL'],
+      'Micky van de Ven': ['DC'], 'Cristian Romero': ['DC'], 'Kevin Danso': ['DC'],
+      'Archie Gray': ['DC', 'DM'], 'Yves Bissouma': ['DM', 'MC'],
+      'Rodrigo Bentancur': ['MC'], 'Pape Matar Sarr': ['MC'], 'Lucas Bergvall': ['MC'],
+      'James Maddison': ['AMC'], 'Dejan Kulusevski': ['AMR', 'MC'],
+      '손흥민': ['AML', 'ST'], 'Brennan Johnson': ['AMR'], 'Wilson Odobert': ['AML'],
+      'Dominic Solanke': ['ST'], 'Richarlison': ['ST'], 'Bryan Gil': ['AML']
+    };
+    d.players.forEach((p) => { if (map[p.name]) p.positions = map[p.name]; p.age = p.age || 24; });
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await tab(page, '영입');
+  await page.waitForTimeout(1500);
+
+  const t = await page.locator('#tab-transfer').innerText();
+  assert.ok(!/영입 제안을 낼 수 없습니다/.test(t), '포지션이 있는데 막혔다');
+  assert.ok(/찾을 유형/.test(t), '영입 유형이 안 나온다');
+  // 요구 능력치가 문장과 칩으로 두 번 나오면 안 된다
+  const dup = t.match(/찾을 유형[^\n]*↑/);
+  assert.equal(dup, null, `요구 능력치가 「찾을 유형」 문장에 또 들어 있다: ${dup}`);
+
+  /*
+   * 사기 전에 가르치면 되는 자리는 그 자리에서 바로 알려 줘야 한다.
+   * 그리고 이미 선발인 선수를 고르면 원래 자리가 비므로 벤치를 먼저 본다.
+   */
+  if (/사기 전에/.test(t)) {
+    const tp = await page.evaluate(() => {
+      const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+      return JSON.parse(localStorage.getItem(k)).players.length;
+    });
+    assert.ok(tp > 0);
+  }
+
+  await page.locator('#tab-transfer button', { hasText: '스카우트 조건 복사' }).click();
+  await page.waitForTimeout(500);
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  assert.ok(/스카우트 필터/.test(copied), `복사한 글에 필터 조건이 없다: ${copied.slice(0, 120)}`);
+  assert.ok(!/NaN|undefined|\[object/.test(copied), '복사한 글에 이상한 값이 있다');
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 8. 좁은 화면에서 가로로 넘치지 않는다 ─────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });

@@ -2047,6 +2047,30 @@
     var slotCount = {};
     base.formation.slots.forEach(function (s) { slotCount[s.pos] = (slotCount[s.pos] || 0) + 1; });
 
+    /*
+     * 포지션을 모르면 영입 제안을 하면 안 됩니다.
+     *
+     * 스쿼드에 포지션 열이 없으면 모든 자리가 "등록된 선수 0명"이 되어, 열한
+     * 자리를 전부 「급함」으로 내놓습니다. 실제로 골키퍼가 있는데도 "골키퍼가
+     * 없다"고 말하게 됩니다 — 틀린 조언을 확신 있게 하는 것이라 아무 말도
+     * 안 하느니만 못합니다. 그래서 세어 보고, 모자라면 목록 대신 사실을 냅니다.
+     */
+    var withPos = players.filter(function (p) { return p.positions.length; }).length;
+    var posCoverage = players.length ? withPos / players.length : 0;
+    if (players.length >= 7 && posCoverage < 0.5) {
+      return {
+        blocked: {
+          reason: 'no-positions',
+          withPos: withPos, total: players.length,
+          text: '선수 ' + players.length + '명 중 ' + withPos + '명만 등록 포지션을 알고 있습니다.',
+          why: '누가 어느 자리를 볼 수 있는지 모르면 「이 자리에 사람이 없다」와 「포지션을 안 넣었다」를 구분할 수 없습니다. '
+            + '지금 상태로 목록을 내면 이미 있는 골키퍼를 두고 골키퍼를 사라고 하게 됩니다.',
+          fix: 'FM 스쿼드 화면 보기에 「포지션」 열을 넣어 한 번만 다시 내보내 주세요. 그 한 번으로 이 탭이 통째로 정확해집니다.'
+        },
+        needs: [], surplus: [], team: [], base: base, unavailable: base.unavailable || []
+      };
+    }
+
     // 포지션별로 한 번씩만 봅니다 — 센터백 두 자리를 따로 적으면 같은 말이 두 번 나옵니다.
     var seen = {}, needs = [], surplus = [];
     base.xi.lineup.forEach(function (l, i) {
@@ -2437,6 +2461,8 @@
     if (!base) return null;
 
     var lineup = base.xi.lineup;
+    var starters = {};
+    lineup.forEach(function (l) { if (l.player) starters[l.player.name] = 1; });
 
     /*
      * 1) 포지션 훈련.
@@ -2480,11 +2506,18 @@
         var gain = learned - now.score;
         if (gain < 4) return;
         var band = ageBand(p.age);
+        /*
+         * 이미 선발인 선수를 다른 자리로 가르치라고 하면, 그 자리를 메우는 대신
+         * 원래 자리에 구멍이 납니다. 주전 센터백에게 오른쪽 수비를 배우라는 조언은
+         * 실제로 쓸 수가 없습니다. 그래서 벤치 자원을 먼저 봅니다.
+         */
+        var isStarter = !!starters[p.name];
         // 어린 선수가 같은 이득이면 먼저입니다 — 실제로 더 빨리 배웁니다.
-        var rank = gain * (band === 'young' ? 1.25 : band === 'old' ? 0.7 : 1);
+        var rank = gain * (band === 'young' ? 1.25 : band === 'old' ? 0.7 : 1)
+          * (isStarter ? 0.45 : 1);
         if (!best || rank > best.rank) {
           best = {
-            rank: rank, player: p, pos: pos, role: role,
+            rank: rank, player: p, pos: pos, role: role, isStarter: isStarter,
             now: Math.round(now.score), after: Math.round(learned),
             gain: Math.round(gain), band: band, age: p.age || null,
             familiarity: Math.round(now.familiarity * 100)
@@ -2493,7 +2526,7 @@
       });
       if (!best) return;
       posTraining.push({
-        pos: pos, posKo: posKo(pos), roleKo: role.ko,
+        pos: pos, posKo: posKo(pos), roleKo: role.ko, isStarter: best.isStarter,
         name: best.player.name, age: best.age, band: best.band,
         now: best.now, after: best.after, gain: best.gain,
         naturals: natural.length, slots: slotPos[pos],
@@ -2503,7 +2536,11 @@
           : posKo(pos) + eul(posKo(pos)) + ' 뛸 수 있는 선수가 ' + natural.length + '명인데 선발에서 '
             + slotPos[pos] + '자리를 씁니다 — 한 명만 빠지면 메울 사람이 없습니다.',
         gainText: '적합도 ' + best.now + ' → ' + best.after + ' (+' + best.gain + ')',
-        ageNote: TRAIN_AGE_NOTE[best.band]
+        ageNote: TRAIN_AGE_NOTE[best.band],
+        // 벤치 자원이 없어 주전을 고른 경우. 그대로 두면 다른 자리가 빕니다.
+        starterNote: best.isStarter
+          ? best.player.name + eun(best.player.name) + ' 지금 선발입니다 — 이 자리로 옮기면 원래 자리가 빕니다. 벤치에 배울 만한 자원이 없다는 뜻이기도 합니다.'
+          : ''
       });
     });
     posTraining.sort(function (a, b) { return b.gain - a.gain; });

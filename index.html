@@ -2368,6 +2368,31 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       if (!S._baseCache || S._baseCache.sig !== sig) S._baseCache = { sig: sig, res: rep.base };
     }
 
+    /*
+     * 포지션을 모르면 영입 목록을 내지 않습니다. 열한 자리를 전부 「급함」으로
+     * 내놓으면서 이미 있는 골키퍼를 사라고 하는 것보다, 무엇을 고치면 되는지
+     * 한 줄로 말하는 편이 낫습니다.
+     */
+    if (rep.blocked) {
+      root.appendChild(h('div', { class: 'card', style: 'border-color:#4a3c17;background:rgba(251,191,36,.06)' }, [
+        h('h2', { text: '아직 영입 제안을 낼 수 없습니다' }),
+        h('div', { class: 'small', style: 'margin-bottom:8px' }, [h('b', { text: rep.blocked.text })]),
+        h('div', { class: 'small', style: 'color:var(--dim);margin-bottom:10px', text: rep.blocked.why }),
+        h('div', { class: 'warn high' }, [
+          h('span', { class: 'ic', text: '!' }),
+          h('span', {}, ['무엇을 하면 되나', h('span', { class: 'fixnote', text: '→ ' + rep.blocked.fix })])
+        ]),
+        h('div', { class: 'tiny muted', style: 'margin-top:8px' }, [
+          '자세한 순서는 ', h('b', { style: 'color:var(--text)', text: '안내' }), ' 탭과 ',
+          h('code', { text: 'docs/FM24-내보내기.md' }), '에 적어 두었습니다. ',
+          '포지션이 들어오면 이 탭에 자리별 영입 유형과 스카우트 필터 숫자가 나옵니다.'
+        ])
+      ]));
+      var tcb = trainingCard();
+      if (tcb) root.appendChild(tcb);
+      return;
+    }
+
     root.appendChild(h('div', { class: 'card' }, [
       h('h2', { text: '영입이 필요한 자리' }),
       h('div', { class: 'desc' }, [
@@ -2419,9 +2444,11 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         h('div', { class: 'small', style: 'color:var(--dim);margin-bottom:6px', text: n.reason }),
         h('div', { class: 'small' }, [
           h('b', { style: 'color:var(--acc)', text: '찾을 유형 ' }),
-          n.profile
+          // 요구 능력치는 바로 아래 칩으로 다시 나오므로 문장에서는 뺍니다.
+          String(n.profile).split(' — ')[0]
         ]),
         attrs,
+        trainInstead(n),
         h('div', { class: 'tiny muted', style: 'margin-top:8px' }, [
           '지금: 주전 ',
           n.starter ? (n.starter.name + ' (' + n.starter.fit + (n.starter.natural ? '' : ' · 다른 자리 선수') + ')') : '없음',
@@ -2438,6 +2465,14 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         h('div', { class: 'chips' }, rep.surplus.map(function (s) {
           return h('span', { class: 'chip', style: 'cursor:default', text: s.ko + ' ' + s.count + '명 (선발 ' + s.need + ')' });
         }))
+      ]));
+    }
+
+    if (rep.needs.length) {
+      root.appendChild(h('div', { class: 'card tight' }, [
+        h('div', { class: 'row' }, [
+          h('button', { class: 'btn', onclick: function () { copyNeeds(rep); } }, ['스카우트 조건 복사'])
+        ])
       ]));
     }
 
@@ -2461,15 +2496,59 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    * 이미 있는 선수에게 그 자리를 가르치는 것입니다. 그래서 영입 목록 바로 아래에
    * 두어 둘을 나란히 놓고 고르게 합니다.
    */
-  function trainingCard() {
+  /*
+   * "이 자리는 사람을 사기 전에 가르치면 된다"를 영입 항목 바로 밑에 붙입니다.
+   * 훈련 카드는 탭 맨 아래에 따로 있는데, 거기까지 내려가서 대조하는 사람은 없습니다.
+   */
+  function trainInstead(need) {
+    var tp = trainingData();
+    if (!tp) return null;
+    var hit = tp.position.filter(function (t) { return t.pos === need.pos; })[0];
+    if (!hit) return null;
+    return h('div', { class: 'warn', style: 'margin-top:8px;background:rgba(74,222,128,.06);border-color:#2c4a35' }, [
+      h('span', { class: 'ic', style: 'color:var(--acc)', text: '↺' }),
+      h('span', {}, [
+        '사기 전에: ' + hit.text,
+        h('span', { class: 'fixnote', text: '→ ' + hit.gainText + (hit.ageNote ? ' · ' + hit.ageNote : '') }),
+        hit.starterNote ? h('span', { class: 'fixnote', style: 'color:var(--warn)', text: '주의: ' + hit.starterNote }) : null
+      ])
+    ]);
+  }
+
+  // 영입 탭에서 두 번(항목마다 · 카드에서) 쓰므로 한 번만 계산합니다.
+  function trainingData() {
     var sig = baseSignature();
-    var tp;
-    if (S._trainCache && S._trainCache.sig === sig) tp = S._trainCache.tp;
-    else {
-      try { tp = E.trainingPlan({ players: S.players, standing: S.standing || 'mid' }); }
-      catch (e) { return null; }
-      S._trainCache = { sig: sig, tp: tp };
-    }
+    if (S._trainCache && S._trainCache.sig === sig) return S._trainCache.tp;
+    var tp = null;
+    try { tp = E.trainingPlan({ players: S.players, standing: S.standing || 'mid' }); } catch (e) { tp = null; }
+    S._trainCache = { sig: sig, tp: tp };
+    return tp;
+  }
+
+  // FM 스카우트 필터에 옮겨 적을 수 있게 글로 냅니다.
+  function copyNeeds(rep) {
+    var L = [];
+    L.push('■ FM24 영입이 필요한 자리 — ' + rep.base.formation.ko + ' / ' + rep.base.plan.ko);
+    rep.needs.forEach(function (n) {
+      L.push('');
+      L.push('[' + (SEV[n.severity] || {}).ko + '] ' + n.ko + ' · ' + n.role.ko + ' / ' + RD.DUTIES[n.duty].ko);
+      L.push('  ' + n.reason);
+      var want = n.wantAttrs.filter(function (a) { return a.target; })
+        .map(function (a) { return a.ko + ' ' + a.target + '↑'; });
+      if (want.length) L.push('  스카우트 필터: ' + want.join(' · '));
+      L.push('  지금: 주전 ' + (n.starter ? n.starter.name + ' (' + n.starter.fit + ')' : '없음')
+        + ' · 백업 ' + (n.backup ? n.backup.name + ' (' + n.backup.fit + ')' : '없음')
+        + ' · 등록 ' + n.naturalCount + '명 / 선발 ' + n.slots + '자리');
+      var tp = trainingData();
+      var hit = tp ? tp.position.filter(function (t) { return t.pos === n.pos; })[0] : null;
+      if (hit) L.push('  사기 전에: ' + hit.text + ' (' + hit.gainText + ')');
+    });
+    if (!rep.needs.length) L.push('  급한 자리가 없습니다.');
+    writeClipboard(L.join('\n'));
+  }
+
+  function trainingCard() {
+    var tp = trainingData();
     if (!tp) return null;
     if (!tp.position.length && !tp.focus.length && !tp.ageing.length) return null;
 
