@@ -616,7 +616,86 @@ await test('프리킥 루틴이 상황별로 나오고, 열어 두면 접히지 
   await page.close();
 });
 
-// ── 11. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 11. 뎁스와 로테이션 ───────────────────────────────────────────────────
+/*
+ * 컨디션을 모르면 로테이션을 짜면 안 되고, 넣으면 실제로 제안이 나와야 한다.
+ * 그리고 컨디션이 최적 11을 바꾸면 안 된다 — 파일을 넣을 때마다 주전이 흔들리면
+ * 포메이션까지 바뀌어 전술 친숙도 설계가 무너진다.
+ */
+await test('컨디션을 넣으면 로테이션이 나오고, 최적 11은 그대로다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  await withPositions(page);
+
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(1800);
+  const rotCard = page.locator('#tab-base details.card').filter({ hasText: '뎁스와 로테이션' }).first();
+  assert.equal(await rotCard.count(), 1, '로테이션 카드가 없다');
+  await rotCard.locator('summary').first().click();
+  await page.waitForTimeout(500);
+  assert.ok(/컨디션을 아는 선수가 없어/.test(await rotCard.innerText()),
+    '컨디션을 모르는데 로테이션을 짰다');
+
+  // 선발 11명을 기억해 둔다
+  const xiBefore = await page.evaluate(() =>
+    [...document.querySelectorAll('#tab-base .pitch .bubble .nm')].map((n) => n.textContent.trim()));
+  assert.ok(xiBefore.length >= 10, `선발을 못 읽었다: ${xiBefore.length}명`);
+
+  // 선발 절반을 지치게 만든다
+  await page.evaluate((names) => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    d.players.forEach((p) => {
+      const isStarter = names.some((n) => p.name.includes(n) || n.includes(p.name.split(' ').pop()));
+      p.cond = isStarter ? 55 : 96;
+      p.mins = isStarter ? 2000 : 100;
+    });
+    localStorage.setItem(k, JSON.stringify(d));
+  }, xiBefore);
+  await page.reload({ waitUntil: 'networkidle' });
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(1800);
+
+  // 최적 11은 그대로여야 한다
+  const xiAfter = await page.evaluate(() =>
+    [...document.querySelectorAll('#tab-base .pitch .bubble .nm')].map((n) => n.textContent.trim()));
+  assert.deepEqual(xiAfter.slice(0, 11), xiBefore.slice(0, 11),
+    '컨디션을 넣자 선발이 바뀌었다 — 전술 친숙도 설계가 무너진다');
+
+  const card2 = page.locator('#tab-base details.card').filter({ hasText: '뎁스와 로테이션' }).first();
+  await card2.locator('summary').first().click();
+  await page.waitForTimeout(600);
+  const t = await card2.innerText();
+  assert.ok(!/컨디션을 아는 선수가 없어/.test(t), '컨디션을 넣었는데 아직 막혀 있다');
+  assert.ok(/이번 경기 로테이션/.test(t), '로테이션 절이 없다');
+  assert.ok(/실질 동급|로테이션|급할 때만|대체 불가/.test(t), '뎁스 등급이 안 나온다');
+  assert.ok(/컨디션이 55/.test(t), `왜 바꾸는지가 없다: ${t.slice(0, 300)}`);
+  assert.ok(!/NaN|undefined|\[object/.test(t), '카드에 이상한 값이 있다');
+
+  // 스쿼드 탭에서 손으로도 넣을 수 있어야 한다
+  await tab(page, '스쿼드');
+  await page.waitForTimeout(900);
+  const fitCard = page.locator('#tab-squad details.card').filter({ hasText: '컨디션 한 번에 넣기' }).first();
+  assert.equal(await fitCard.count(), 1, '컨디션 입력 카드가 없다');
+  await fitCard.locator('summary').first().click();
+  await page.waitForTimeout(400);
+  const first = fitCard.locator('input[type=number]').first();
+  await first.fill('42');
+  await page.waitForTimeout(500);
+  // 입력 중에 화면을 다시 그리면 커서가 날아간다 — 구간 이름만 그 자리에서 바뀌어야 한다
+  assert.ok(await first.evaluate((el) => document.activeElement === el),
+    '컨디션을 치는 도중에 포커스가 날아갔다');
+  assert.ok(/바닥/.test(await fitCard.innerText()), '컨디션 42인데 구간 표시가 안 바뀌었다');
+  const saved = await stored(page);
+  assert.ok(saved.players.some((p) => p.cond === 42), '손으로 넣은 컨디션이 저장되지 않았다');
+
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 12. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });

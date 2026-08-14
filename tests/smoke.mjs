@@ -2284,6 +2284,156 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(tallSp.weakDefence, null, '제공권이 좋은데 수비 경고가 나왔다');
 }
 
+// ── 뎁스와 로테이션 ───────────────────────────────────────────────────────
+/*
+ * 「주전 아니면 나머지」로는 로테이션을 말할 수 없다. 적합도 71과 70은 사실상
+ * 같은 선수인데 하나는 주전, 하나는 그냥 나머지가 되기 때문이다.
+ *
+ * 그리고 지켜야 할 선이 하나 있다 — 컨디션은 최적 11을 바꾸면 안 된다.
+ * 파일을 넣을 때마다 주전이 바뀌면 포메이션까지 흔들려 전술 친숙도가 무너진다.
+ */
+{
+  // 데이터 정합성 — 등급 경계가 순서대로여야 판정이 뒤집히지 않는다
+  let prevGap = -1;
+  for (const t of TD.DEPTH_TIERS) {
+    assert.ok(t.id && t.ko && t.note, `뎁스 등급 ${t.id}에 이름이 빠졌다`);
+    assert.ok(t.gap > prevGap, `뎁스 등급 경계가 오름차순이 아니다: ${t.id}`);
+    prevGap = t.gap;
+  }
+  assert.equal(TD.DEPTH_TIERS[TD.DEPTH_TIERS.length - 1].gap, Infinity, '가장 낮은 등급이 열려 있지 않다');
+  let prevMin = 101;
+  for (const b of TD.CONDITION_BANDS) {
+    assert.ok(b.id && b.ko && b.note, `컨디션 구간 ${b.id}에 이름이 빠졌다`);
+    assert.ok(b.min < prevMin, `컨디션 구간이 내림차순이 아니다: ${b.id}`);
+    prevMin = b.min;
+  }
+  assert.equal(TD.CONDITION_BANDS[TD.CONDITION_BANDS.length - 1].min, 0, '가장 낮은 구간이 0에서 안 열린다');
+
+  const fresh = squad.map((p, i) => ({ ...p, cond: 95, mins: i < 11 ? 1800 : 200 }));
+  const tiers = E.squadTiers({ players: fresh, standing: 'mid' });
+  assert.ok(tiers, '뎁스를 못 냈다');
+  assert.equal(tiers.slots.length, 11, `자리가 ${tiers.slots.length}개다`);
+
+  const tierIds = new Set(TD.DEPTH_TIERS.map((t) => t.id));
+  for (const s of tiers.slots) {
+    assert.ok(tierIds.has(s.tier.id), `알 수 없는 등급 ${s.tier.id}`);
+    // 대체 자원은 다른 자리의 주전이면 안 된다 — 데려오면 원래 자리가 빈다
+    assert.ok(!s.backup || !s.backup.starterElsewhere,
+      `${s.posKo}의 대체 자원 ${s.backup && s.backup.name}이 다른 자리 주전이다`);
+    // 주전 본인이 자기 자리 후보로 나오면 안 된다
+    assert.ok(!s.alts.some((a) => s.starter && a.name === s.starter.name),
+      `${s.posKo}: 주전이 자기 자리 대체 자원으로 나왔다`);
+    if (s.backup) {
+      assert.ok(s.backup.fit <= (s.starter ? s.starter.fit : 100),
+        `${s.posKo}: 대체 자원이 주전보다 적합도가 높다`);
+    }
+  }
+  assert.equal(Object.values(tiers.counts).reduce((a, b) => a + b, 0), 11, '등급 집계가 11이 아니다');
+
+  /*
+   * "대체 자원이 있는 7자리"를 사람 일곱 명으로 읽으면 뎁스를 실제보다 두껍게
+   * 본다. 같은 사람이 여러 자리를 겹쳐 맡고 있으면 그 사실을 말해야 한다.
+   */
+  const coveredSlots = tiers.slots.filter((s) => s.backup);
+  const heads = new Set(coveredSlots.map((s) => s.backup.name)).size;
+  if (heads < coveredSlots.length) {
+    assert.ok(tiers.overlap, '대체 자원이 겹치는데 아무 말도 안 했다');
+    assert.equal(tiers.overlap.slots, coveredSlots.length);
+    assert.equal(tiers.overlap.heads, heads);
+    assert.ok(!/NaN|undefined/.test(tiers.overlap.text + tiers.overlap.fix));
+  } else {
+    assert.equal(tiers.overlap, null, '겹치지 않는데 겹친다고 했다');
+  }
+
+  /*
+   * 컨디션은 최적 11을 바꾸면 안 된다. 이게 깨지면 파일을 넣을 때마다
+   * 포메이션이 흔들려 전술 슬롯·친숙도 설계가 통째로 무너진다.
+   */
+  const tired = squad.map((p, i) => ({ ...p, cond: i % 2 ? 40 : 100 }));
+  const nameOf = (b) => b.xi.lineup.map((l) => (l.player ? l.player.name : '-')).join('|');
+  assert.equal(nameOf(E.baseTactic({ players: tired, standing: 'mid' })),
+    nameOf(E.baseTactic({ players: squad, standing: 'mid' })),
+    '컨디션이 최적 11을 바꿨다 — 선발이 매주 흔들리면 전술 친숙도 설계가 무너진다');
+
+  // 컨디션을 모르면 지어내지 않는다
+  const blind = E.rotationPlan({ players: squad, standing: 'mid' });
+  assert.ok(blind.blocked, '컨디션을 모르는데 로테이션을 짰다');
+  assert.equal(blind.blocked.reason, 'no-condition');
+  assert.equal(blind.swaps.length, 0);
+  assert.ok(/컨디션/.test(blind.blocked.fix), '무엇을 하면 되는지가 없다');
+
+  // 전원 멀쩡하면 바꾸지 않는다
+  const allFresh = E.rotationPlan({ players: fresh, standing: 'mid' });
+  assert.equal(allFresh.blocked, null);
+  assert.equal(allFresh.applied.length, 0, '전원 컨디션 95인데 교체를 제안했다');
+  assert.equal(allFresh.cost, 0);
+  assert.equal(allFresh.xi, null, '바꾼 것이 없는데 로테이션 XI를 냈다');
+
+  /*
+   * 지친 주전이 있고 멀쩡한 대체 자원이 있으면 바꿔야 한다.
+   * 그리고 대가(몇 점 손해인지)를 반드시 같이 내야 한다 — 없으면 판단할 수 없다.
+   */
+  const starters = new Set(tiers.slots.map((s) => s.starter && s.starter.name));
+  const halfTired = fresh.map((p) => (starters.has(p.name) ? { ...p, cond: 55 } : p));
+  const rot = E.rotationPlan({ players: halfTired, standing: 'mid' });
+  assert.equal(rot.blocked, null);
+  assert.ok(rot.swaps.length, '선발 전원이 컨디션 55인데 아무 말도 안 했다');
+  for (const s of rot.applied) {
+    assert.ok(typeof s.cost === 'number' && s.cost >= 0, `${s.pos}: 대가를 안 냈다`);
+    assert.ok(s.in && s.out, `${s.pos}: 누가 나가고 누가 들어오는지가 없다`);
+    // 어느 이유로 바꾸든 지친 선수를 넣으면 안 된다
+    if (s.in.cond !== null) {
+      assert.ok(s.in.cond >= E.TIRED_AT, `${s.pos}: 컨디션 ${s.in.cond}인 선수를 넣었다`);
+    }
+    // 쉬게 하려고 바꾸는 것이면 들어오는 쪽이 더 나은 상태여야 한다
+    if (s.reason === 'tired' && s.in.cond !== null && s.out.cond !== null) {
+      assert.ok(s.in.cond > s.out.cond,
+        `${s.pos}: 컨디션 ${s.out.cond}를 빼고 ${s.in.cond}를 넣었다`);
+    }
+    assert.ok(s.in.gap <= 12, `${s.pos}: ${s.in.gap}점이나 손해 보면서 로테를 돌렸다`);
+    // 한 선수를 두 자리에 동시에 넣을 수 없다
+  }
+  const inNames = rot.applied.map((s) => s.in.name);
+  assert.equal(new Set(inNames).size, inNames.length, `같은 선수를 두 자리에 넣었다: ${inNames.join(', ')}`);
+  // 들어온 선수가 원래 다른 자리 주전이면 그 자리가 빈다
+  assert.ok(!rot.applied.some((s) => starters.has(s.in.name)),
+    '다른 자리 주전을 데려와 로테이션이라고 했다');
+  if (rot.applied.length) {
+    assert.ok(rot.xi, '교체를 제안했는데 로테이션 XI가 없다');
+    assert.equal(rot.xi.lineup.length, 11);
+    const rotNames = rot.xi.lineup.map((l) => l.player && l.player.name).filter(Boolean);
+    assert.equal(new Set(rotNames).size, rotNames.length, '로테이션 XI에 같은 선수가 두 번 들어갔다');
+    assert.equal(rot.cost, rot.applied.reduce((n, s) => n + s.cost, 0), '대가 합계가 안 맞는다');
+  }
+
+  /*
+   * 대체 자원이 없는데 지쳤으면, 조용히 넘어가지 말고 그 사실을 말해야 한다.
+   * "쉬게 하세요"만 하고 대안이 없으면 조언이 아니다.
+   */
+  const thin = squad.slice(0, 12).map((p) => ({ ...p, cond: 50 }));
+  const thinRot = E.rotationPlan({ players: thin, standing: 'mid' });
+  assert.ok(thinRot.swaps.some((s) => s.kind === 'hold'),
+    '대체 자원 없이 지친 선수를 두고 아무 말도 안 했다');
+  const hold = thinRot.swaps.find((s) => s.kind === 'hold');
+  assert.ok(/교체|이적|뎁스/.test(hold.fix), `대안을 안 냈다: ${hold.fix}`);
+
+  // 문장 검사
+  for (const r of [blind, allFresh, rot, thinRot]) {
+    for (const s of r.swaps) {
+      assert.ok(!/NaN|undefined|null|\[object |[은는이가을를와과]\([은는이가을를와과]\)/
+        .test(s.text + s.why + s.fix + (s.sharpNote || '')),
+        `로테이션 문장에 이상한 값이 있다: ${s.text} / ${s.why} / ${s.fix}`);
+    }
+    if (r.blocked) {
+      assert.ok(!/NaN|undefined|\[object/.test(r.blocked.text + r.blocked.why + r.blocked.fix));
+    }
+  }
+
+  // 선수가 모자라면 조용히 없는 값을 냅니다
+  assert.equal(E.squadTiers({ players: squad.slice(0, 4), standing: 'mid' }), null);
+  assert.equal(E.rotationPlan({ players: [], standing: 'mid' }), null);
+}
+
 // ── 프리킥 루틴 ───────────────────────────────────────────────────────────
 /*
  * FM의 세트피스 편집기는 프리킥을 위치별로 따로 짜게 되어 있다. 중앙에서 직접

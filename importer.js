@@ -49,6 +49,18 @@
     '선수 특성', '특성', '선호 플레이', '플레이 성향');
   // 컨디션은 부상이 아니라 피로도입니다 — 상대 선발의 약한 고리를 찾는 데 씁니다.
   reg('condition', 'Condition', '컨디션', 'Cond');
+  /*
+   * 로테이션에 필요한 열.
+   *
+   * FM 스쿼드 보기에 넣어 내보내면 그대로 읽힙니다. 화면에서 손으로 넣을 수도
+   * 있지만 스물몇 명을 매주 치는 것은 못 할 일이라, 열로 읽히는 것이 중요합니다.
+   * 'Apps'는 아래 skip 목록에도 있었는데, 이제 실제로 씁니다.
+   */
+  reg('sharp', 'Match Sharpness', 'Sharpness', 'Match Sharp',
+    '경기 체력', '경기체력', '실전 감각', '경기 감각');
+  reg('mins', 'Mins', 'Minutes', 'Mins Played', 'Minutes Played',
+    '출전 시간', '출장 시간', '뛴 시간');
+  reg('apps', 'Apps', 'Appearances', 'Apps (Sub)', '출장', '출전', '출장 경기');
   // 부상·출장 정지 — 값이 있으면 지금 못 뛰는 선수로 봅니다.
   reg('injury', 'Injury', '부상', '부상 상태', 'Expected Return Date', '예상 복귀일',
     '복귀 예정일', '부상 정보', 'Suspension', '출장 정지');
@@ -61,7 +73,7 @@
     'Selected Position', '선택한 포지션', '선발 포지션',
     // 'Nat'은 국적이기도 하고 타고난 체력이기도 합니다. 능력치 쪽을 택합니다
     // (아래 ALIASES가 덮어씁니다) — 틀리면 화면에서 다시 지정할 수 있습니다.
-    'Nationality', '국적', 'Apps', '출장', 'Gls', '득점',
+    'Nationality', '국적', 'Gls', '득점',
     'Transfer Value', '이적료', 'Wage', '주급', 'Contract', '계약');
 
   /*
@@ -184,6 +196,36 @@
     return clamp(n, 1, 20);
   }
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+  /*
+   * 컨디션·경기 체력은 FM이 '94%' 처럼 내보냅니다. 판마다 '94', '94 %',
+   * 소수점이 붙기도 하므로 숫자만 뽑아 0~100으로 자릅니다.
+   */
+  function parsePercent(raw) {
+    if (raw == null) return null;
+    var s = String(raw).trim();
+    if (!s || s === '-' || s === '–') return null;
+    var m = s.match(/-?\d+(?:[.,]\d+)?/);
+    if (!m) return null;
+    var n = parseFloat(m[0].replace(',', '.'));
+    if (!isFinite(n)) return null;
+    return clamp(Math.round(n), 0, 100);
+  }
+
+  /*
+   * 출전 수·출전 시간. 'Apps (Sub)' 열은 '12 (3)' 꼴이라 앞의 숫자만 씁니다 —
+   * 교체 출전까지 더해 세면 "많이 뛰었다"가 실제보다 커집니다.
+   * 천 단위 쉼표가 붙는 판이 있어 걷어냅니다.
+   */
+  function parseCount(raw) {
+    if (raw == null) return null;
+    var s = String(raw).trim();
+    if (!s || s === '-' || s === '–') return null;
+    var m = s.replace(/,/g, '').match(/\d+/);
+    if (!m) return null;
+    var n = parseInt(m[0], 10);
+    return isFinite(n) ? n : null;
+  }
 
   /*
    * 특성 칸 읽기.
@@ -544,7 +586,15 @@
         else if (field === 'traits') { var tr = parseTraits(raw); if (tr.length) p.traits = tr; }
         else if (field === 'foot') p.foot = parseFoot(raw);
         else if (field === 'club') p.club = String(raw).trim();
-        else if (field === 'condition') p.condition = String(raw).trim();
+        else if (field === 'condition') {
+          p.condition = String(raw).trim();
+          var pct = parsePercent(raw);
+          if (pct !== null) p.cond = pct;
+        }
+        else if (field === 'sharp') { var sh = parsePercent(raw); if (sh !== null) p.sharp = sh; }
+        else if (field === 'mins') { var mn = parseCount(raw); if (mn !== null) p.mins = mn; }
+        // 'Apps (Sub)'는 '12 (3)' 꼴로 옵니다 — 앞의 선발 출전만 셉니다.
+        else if (field === 'apps') { var ap = parseCount(raw); if (ap !== null) p.apps = ap; }
         else if (field === 'injury') {
           var inj = String(raw).trim();
           // 열이 있으면 비어 있다는 것도 정보입니다 — 비었으면 '뛸 수 있음'으로 봅니다.
@@ -805,6 +855,14 @@
       if (p.foot && p.foot !== 'B') cur.foot = p.foot;
       if (p.age) cur.age = p.age;
       if (p.club) cur.club = p.club;
+      /*
+       * 상태 값은 매주 바뀝니다. 빈 열이 이미 넣어 둔 값을 지우면 안 되지만,
+       * 값이 들어오면 최신으로 덮습니다 — 지난주 컨디션으로 로테를 짜면 안 됩니다.
+       */
+      if (p.cond !== undefined) { cur.cond = p.cond; cur.condition = p.condition; }
+      if (p.sharp !== undefined) cur.sharp = p.sharp;
+      if (p.mins !== undefined) cur.mins = p.mins;
+      if (p.apps !== undefined) cur.apps = p.apps;
       // 화면에서 켜 둔 특성을 빈 열이 지우면 안 됩니다.
       if (p.traits && p.traits.length) cur.traits = p.traits;
       cur.attrCount = Object.keys(cur.attrs).filter(function (k) { return cur.attrs[k] > 0; }).length;

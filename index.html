@@ -1026,6 +1026,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     var bulk = bulkTraitCard();
     if (bulk) root.appendChild(bulk);
 
+    var fit = bulkFitnessCard();
+    if (fit) root.appendChild(fit);
+
     // 선수 목록
     var listCard = h('div', { class: 'card' }, [
       h('h2', {}, ['선수 ', h('span', { class: 'muted small', text: '(' + S.players.length + '명)' })]),
@@ -1219,6 +1222,79 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (list.some(function (x) { return ['ST', 'AMC', 'AMR', 'AML'].indexOf(x) >= 0; })) return 'ATT';
     if (list.some(function (x) { return ['DC', 'DR', 'DL', 'WBR', 'WBL', 'DM'].indexOf(x) >= 0; })) return 'DEF';
     return 'MID';
+  }
+
+  /*
+   * ── 컨디션 한 번에 넣기 ─────────────────────────────────────────────────
+   *
+   * 로테이션을 짜려면 컨디션이 있어야 하는데, 스물몇 명을 매주 손으로 치는 것은
+   * 못 할 일입니다. 그래서 FM 스쿼드 보기에 「컨디션」 열을 넣어 내보내면 그대로
+   * 읽히게 해 두고, 여기는 그게 안 될 때 쓰는 보조 수단으로 둡니다 —
+   * 선발과 그 대체 자원만 넣어도 로테이션은 나옵니다.
+   */
+  function bulkFitnessCard() {
+    if (S.players.length < 3) return null;
+    var known = S.players.filter(function (p) { return typeof p.cond === 'number'; }).length;
+
+    var card = rememberOpen('bulkFit', h('details', { class: 'card' }));
+    card.appendChild(h('summary', { style: 'cursor:pointer' }, [
+      h('span', { style: 'font-size:15px;font-weight:800', text: '컨디션 한 번에 넣기' }),
+      h('span', { class: 'tiny muted', text: '  ' + known + '/' + S.players.length + '명 입력됨' })
+    ]));
+    card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px' }, [
+      '로테이션 제안에 쓰는 값입니다. ',
+      h('b', { style: 'color:var(--text)', text: 'FM 스쿼드 보기에 「컨디션」 열을 넣어 내보내면 자동으로 읽힙니다' }),
+      ' — 「경기 체력」 · 「출전 시간」까지 있으면 어린 선수 출전 제안까지 나옵니다. 여기는 그게 안 될 때만 쓰세요. ',
+      h('b', { style: 'color:var(--text)', text: '컨디션은 선발 계산에 쓰지 않습니다' }),
+      ' — 파일을 넣을 때마다 주전이 바뀌면 포메이션까지 흔들려 전술 친숙도가 무너집니다.'
+    ]));
+
+    var grid = h('div', { class: 'statrows', style: 'margin-top:4px' });
+    S.players.forEach(function (p) {
+      var band = null;
+      try { band = E.condBand(p.cond); } catch (e) { band = null; }
+      var bandEl = h('span', { class: 'tiny muted', style: 'min-width:38px', text: band ? band.ko : '' });
+      grid.appendChild(h('div', { class: 'statrow', style: 'gap:8px' }, [
+        h('b', { class: 'us', style: 'text-align:left', text: p.name }),
+        h('input', {
+          type: 'number', min: '0', max: '100', inputmode: 'numeric',
+          style: 'width:74px;text-align:center',
+          value: typeof p.cond === 'number' ? String(p.cond) : '',
+          'aria-label': p.name + ' 컨디션',
+          placeholder: '—',
+          /*
+           * 여기서 render()를 부르면 안 됩니다. 커서가 있는 채로 화면을 다시
+           * 그리면 포커스가 날아가 다음 칸으로 넘어갈 수가 없고, blur 도중에
+           * 부르면 removeChild가 터집니다(브라우저 검사가 이걸 잡았습니다).
+           * 값만 저장하고 옆의 구간 이름만 그 자리에서 고칩니다 — 로테이션 카드는
+           * 「기본 전술」 탭으로 넘어갈 때 어차피 새로 그려집니다.
+           */
+          oninput: function (e) {
+            var v = parseInt(e.target.value, 10);
+            // 빈칸은 0이 아니라 '모름'입니다. 0으로 저장하면 전원 지친 것이 됩니다.
+            if (e.target.value === '' || !isFinite(v)) delete p.cond;
+            else p.cond = Math.max(0, Math.min(100, v));
+            save();
+            var b = null;
+            try { b = E.condBand(p.cond); } catch (err) { b = null; }
+            bandEl.textContent = b ? b.ko : '';
+          }
+        }),
+        bandEl
+      ]));
+    });
+    card.appendChild(grid);
+    card.appendChild(h('div', { class: 'row', style: 'margin-top:9px' }, [
+      h('button', {
+        class: 'btn sm ghost',
+        onclick: function () {
+          if (!window.confirm('입력한 컨디션 ' + known + '건을 모두 지웁니다. 계속할까요?')) return;
+          S.players.forEach(function (p) { delete p.cond; });
+          save(); render();
+        }
+      }, ['모두 지우기'])
+    ]));
+    return card;
   }
 
   function bulkTraitCard() {
@@ -2348,6 +2424,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
     root.appendChild(tacticSlotCard(res));
 
+    var rot = rotationCard(res);
+    if (rot) root.appendChild(rot);
+
     root.appendChild(fmStepsCard(res.plan, res.formation, res.instructions, res.individual.length));
     var unavB = unavailableNote(res.unavailable);
     if (unavB) root.appendChild(unavB);
@@ -3108,6 +3187,147 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       if (audit.split) {
         card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:7px', text: audit.split }));
       }
+    }
+    return card;
+  }
+
+  /*
+   * ── 뎁스와 로테이션 ─────────────────────────────────────────────────────
+   *
+   * 「주전 아니면 나머지」로는 로테이션을 말할 수 없습니다. 자리마다 대체 자원이
+   * 주전과 얼마나 차이 나는지를 등급으로 내고, 컨디션을 알면 이번 경기에 누구를
+   * 쉬게 할지까지 냅니다.
+   *
+   * 최적 11은 그대로 둡니다 — 여기서 나오는 것은 "그 11에서 무엇을 바꿀까"입니다.
+   */
+  var TIER_COLOR = {
+    equal: 'var(--acc)', rotation: 'var(--acc2)',
+    emergency: 'var(--warn)', none: 'var(--danger)'
+  };
+
+  function rotationCard(res) {
+    var rot;
+    try {
+      rot = E.rotationPlan({ players: S.players, standing: S.standing || 'mid', base: res });
+    } catch (e) { return null; }
+    if (!rot) return null;
+    var t = rot.tiers;
+
+    var card = rememberOpen('rotation', h('details', { class: 'card' }));
+    var head = rot.blocked ? '컨디션 미입력'
+      : rot.applied.length ? rot.applied.length + '명 교체 제안'
+        : '그대로 가세요';
+    card.appendChild(h('summary', { style: 'cursor:pointer' }, [
+      h('span', { style: 'font-size:15px;font-weight:800', text: '뎁스와 로테이션' }),
+      h('span', { class: 'tiny muted', text: '  ' + head })
+    ]));
+    card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px' }, [
+      '자리마다 ', h('b', { style: 'color:var(--text)', text: '주전과 얼마나 차이 나는 대체 자원이 있는지' }),
+      '를 냅니다. 다른 자리의 주전은 대체 자원으로 세지 않습니다 — 데려오면 원래 자리가 비니까요.'
+    ]));
+
+    // 1) 자리별 뎁스
+    var counts = TD.DEPTH_TIERS.map(function (x) {
+      return x.ko + ' ' + (t.counts[x.id] || 0);
+    }).join(' · ');
+    card.appendChild(h('div', { class: 'tiny muted', style: 'margin-bottom:7px', text: counts }));
+
+    /*
+     * statrow 격자는 좌우 두 팀 숫자를 견주려고 만든 것이라 이름이 두 줄로
+     * 접힙니다. 여기는 한 줄에 자리 · 대체 자원 · 등급이 흐르면 되므로
+     * 따로 짭니다 — 이름은 넘치면 말줄임으로 자릅니다.
+     */
+    var rows = h('div', {});
+    t.slots.forEach(function (s) {
+      var b = s.backup;
+      rows.appendChild(h('div', {
+        style: 'display:flex;gap:8px;align-items:baseline;padding:5px 0;'
+          + 'border-bottom:1px solid var(--line);font-size:12.5px'
+      }, [
+        h('span', {
+          style: 'flex:0 0 auto;min-width:96px;color:var(--dim2);white-space:nowrap;'
+            + 'overflow:hidden;text-overflow:ellipsis;max-width:44%',
+          text: s.posKo + (s.starter ? ' · ' + s.starter.name : '')
+        }),
+        h('span', {
+          style: 'flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+            + 'color:' + (b ? 'var(--text)' : 'var(--dim2)'),
+          text: b ? '→ ' + b.name + ' (' + b.fit + (b.gap > 0 ? ' · −' + b.gap : '') + ')' : '→ 대체 자원 없음'
+        }),
+        h('span', {
+          class: 'tiny', style: 'flex:0 0 auto;white-space:nowrap;font-weight:700;color:'
+            + (TIER_COLOR[s.tier.id] || 'var(--dim)'),
+          text: s.tier.ko
+        })
+      ]));
+    });
+    card.appendChild(rows);
+
+    /*
+     * 같은 사람이 여러 자리를 겹쳐 맡고 있으면 "대체 자원 7자리"가 사람 일곱 명으로
+     * 읽힙니다. 실제로는 셋이 일곱 자리를 덮고 있을 수 있습니다.
+     */
+    if (t.overlap) {
+      card.appendChild(h('div', { class: 'warn', style: 'margin-top:9px' }, [
+        h('span', { class: 'ic', text: '·' }),
+        h('span', {}, [t.overlap.text, h('span', { class: 'fixnote', text: t.overlap.fix })])
+      ]));
+    }
+
+    // 2) 이번 경기 로테이션
+    card.appendChild(h('h3', { style: 'font-size:12px;color:var(--dim);margin:15px 0 6px', text: '이번 경기 로테이션' }));
+    if (rot.blocked) {
+      card.appendChild(h('div', { class: 'warn' }, [
+        h('span', { class: 'ic', text: '·' }),
+        h('span', {}, [
+          rot.blocked.text,
+          h('span', { class: 'fixnote', text: rot.blocked.why }),
+          h('span', { class: 'fixnote', text: '→ ' + rot.blocked.fix })
+        ])
+      ]));
+      card.appendChild(h('div', { class: 'row', style: 'margin-top:8px' }, [
+        h('button', {
+          class: 'btn sm', onclick: function () { S.tab = 'squad'; S._open.bulkFit = true; render(); window.scrollTo(0, 0); }
+        }, ['컨디션 넣으러 가기'])
+      ]));
+      return card;
+    }
+
+    if (!rot.swaps.length) {
+      card.appendChild(h('div', { class: 'rep' }, [
+        h('b', { text: '바꿀 이유가 없습니다. ' }),
+        '선발 ' + rot.total + '명 중 컨디션을 아는 ' + rot.known + '명이 모두 쓸 만한 상태입니다.'
+      ]));
+      return card;
+    }
+
+    rot.swaps.forEach(function (s) {
+      if (s.kind === 'hold') {
+        card.appendChild(h('div', { class: 'warn high' }, [
+          h('span', { class: 'ic', text: '!' }),
+          h('span', {}, [s.text, h('span', { class: 'fixnote', text: s.why }),
+            h('span', { class: 'fixnote', text: '→ ' + s.fix })])
+        ]));
+        return;
+      }
+      card.appendChild(h('div', { class: 'rep', style: 'margin-bottom:7px' }, [
+        h('div', { class: 'row', style: 'gap:7px;align-items:center' }, [
+          h('b', { style: 'color:var(--acc)', text: s.text }),
+          h('span', {
+            class: 'tiny', style: 'color:' + (s.cost <= 4 ? 'var(--acc)' : 'var(--warn)'),
+            text: s.cost <= 0 ? '손실 없음' : '−' + s.cost + '점'
+          })
+        ]),
+        h('div', { class: 'tiny', style: 'color:var(--dim);margin-top:4px', text: s.why }),
+        h('div', { class: 'fixnote', text: '→ ' + s.fix }),
+        s.sharpNote ? h('div', { class: 'fixnote', text: s.sharpNote }) : null
+      ]));
+    });
+
+    if (rot.applied.length) {
+      card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:7px',
+        text: '다 적용하면 선발 적합도 합계가 ' + rot.cost + '점 내려갑니다.' }));
+      card.appendChild(bigPitch(rot.xi.lineup));
     }
     return card;
   }

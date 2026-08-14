@@ -62,11 +62,20 @@ function makeSquad(n, opts = {}) {
     // 특성은 역할 적합도와 개인 지시를 바꾸므로 여기서도 섞습니다.
     const traits = opts.noTraits ? []
       : TRD.TRAITS.filter(() => rnd() < 0.12).map((t) => t.id);
+    /*
+     * 컨디션·출전 시간은 사람이 손으로 넣거나 열로 읽히는 값이라
+     * 전원 입력 / 일부만 / 아예 없음이 다 섞입니다.
+     */
+    const state = opts.noState ? {} : {
+      cond: rnd() < 0.25 ? undefined : int(20, 100),
+      sharp: rnd() < 0.4 ? undefined : int(0, 100),
+      mins: rnd() < 0.4 ? undefined : int(0, 3000)
+    };
     out.push({
       id: 'p' + i, name: '선수' + i, positions,
       foot: pick(['L', 'R', 'B', undefined]),
       age: opts.noAge ? undefined : int(16, 38),
-      traits, attrs
+      traits, attrs, ...state
     });
   }
   return out;
@@ -177,8 +186,55 @@ const CASES = [
   ['전원 강함', { n: 26, lo: 16, hi: 20 }],
   ['빠듯한 인원', { n: 12 }],
   ['모자란 인원', { n: 9 }],                     // 11명이 안 되면 조용히 비워야 한다
-  ['나이·특성 모름', { n: 26, noAge: true, noTraits: true }]
+  ['나이·특성 모름', { n: 26, noAge: true, noTraits: true }],
+  ['상태 모름', { n: 26, noState: true }]        // 컨디션이 없으면 로테이션은 막혀야 한다
 ];
+
+/*
+ * 로테이션은 "쉬게 하려고 더 지친 선수를 넣는" 실수를 하면 안 됩니다.
+ * 그리고 다른 자리 주전을 데려오면 그 자리가 빕니다 — 뎁스가 아니라 돌려막기입니다.
+ */
+function checkRotation(tag, players, standing, base) {
+  let rot;
+  try { rot = E.rotationPlan({ players, standing, base }); } catch (e) { fail(tag, 'throw ' + e.message); return; }
+  if (!rot) return;
+  checkStrings(tag, rot.swaps);
+  if (rot.blocked) {
+    checkStrings(tag, rot.blocked);
+    if (rot.swaps.length) fail(tag, '컨디션을 모른다면서 교체를 제안했다');
+    return;
+  }
+  const starters = new Set(rot.tiers.slots.map((s) => s.starter && s.starter.name).filter(Boolean));
+  const seen = new Set();
+  for (const s of rot.applied) {
+    if (!s.in || !s.out) { fail(tag, `${s.pos}: 누가 나가고 들어오는지가 없다`); continue; }
+    if (seen.has(s.in.name)) fail(tag, `${s.in.name}을 두 자리에 넣었다`);
+    seen.add(s.in.name);
+    if (starters.has(s.in.name)) fail(tag, `다른 자리 주전 ${s.in.name}을 데려왔다`);
+    // 어느 이유로 바꾸든 지친 선수를 넣으면 안 되고,
+    // 쉬게 하려고 바꾸는 것이면 들어오는 쪽이 더 나은 상태여야 한다.
+    if (s.in.cond !== null && s.in.cond < E.TIRED_AT) {
+      fail(tag, `${s.pos}: 컨디션 ${s.in.cond}인 선수를 넣었다`);
+    }
+    if (s.reason === 'tired' && s.in.cond !== null && s.out.cond !== null && s.in.cond <= s.out.cond) {
+      fail(tag, `${s.pos}: 쉬게 한다면서 컨디션 ${s.out.cond}를 빼고 ${s.in.cond}를 넣었다`);
+    }
+    if (!(s.cost >= 0)) fail(tag, `${s.pos}: 대가가 ${s.cost}다`);
+  }
+  if (rot.xi) {
+    const names = rot.xi.lineup.map((l) => l.player && l.player.name).filter(Boolean);
+    if (new Set(names).size !== names.length) fail(tag, '로테이션 XI에 같은 선수가 두 번 들어갔다');
+    if (rot.xi.lineup.length !== 11) fail(tag, `로테이션 XI가 ${rot.xi.lineup.length}명이다`);
+  } else if (rot.applied.length) {
+    fail(tag, '교체를 제안했는데 로테이션 XI가 없다');
+  }
+  for (const s of rot.tiers.slots) {
+    if (s.backup && s.backup.starterElsewhere) fail(tag, `${s.posKo}의 대체 자원이 다른 자리 주전이다`);
+    if (s.backup && s.starter && s.backup.fit > s.starter.fit) {
+      fail(tag, `${s.posKo}: 대체 자원이 주전보다 적합도가 높다`);
+    }
+  }
+}
 
 /*
  * 훈련 제안은 조언이 실제로 따라 할 수 있는 것이어야 합니다.
@@ -230,6 +286,7 @@ for (const [label, opts] of CASES) {
       checkStrings(tag, base.warnings);
       checkSetPieces(tag, base.xi);
       checkTraining(`훈련/${label}/${standing}`, squad, standing);
+      checkRotation(`로테/${label}/${standing}`, squad, standing, base);
     }
 
     for (const f of FD.FORMATIONS) {

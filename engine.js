@@ -1907,6 +1907,275 @@
     });
   }
 
+  /*
+   * ── 뎁스와 로테이션 ─────────────────────────────────────────────────────
+   *
+   * 지금까지 선수는 주전 아니면 나머지, 둘뿐이었습니다. 그런데 적합도 71과 70은
+   * 사실상 같은 선수인데 하나는 주전, 하나는 그냥 '나머지'가 됩니다. 그 상태로는
+   * "이번 주는 돌려도 된다"를 말할 수 없습니다.
+   *
+   * 그리고 컨디션·출전 시간을 아예 안 봤습니다. 그래서 "누구를 쉬게 할까"는
+   * 이 도구가 답할 수 없는 질문이었습니다.
+   *
+   * 여기서 지키는 선 하나 — **최적 11은 능력치로만 정합니다.** 컨디션을 선발
+   * 계산에 섞으면 파일을 새로 넣을 때마다 주전이 바뀌고, 포메이션까지 흔들려
+   * 전술 친숙도 설계가 통째로 무너집니다. 컨디션은 여기서만 씁니다.
+   */
+  var COND_BANDS = (TD.CONDITION_BANDS || []).slice().sort(function (a, b) { return b.min - a.min; });
+  var TIERS = (TD.DEPTH_TIERS || []).slice().sort(function (a, b) { return a.gap - b.gap; });
+
+  function condBand(v) {
+    if (typeof v !== 'number' || !isFinite(v) || v <= 0) return null;
+    for (var i = 0; i < COND_BANDS.length; i++) {
+      if (v >= COND_BANDS[i].min) return COND_BANDS[i];
+    }
+    return COND_BANDS[COND_BANDS.length - 1] || null;
+  }
+  function tierFor(gap) {
+    for (var i = 0; i < TIERS.length; i++) {
+      if (gap <= TIERS[i].gap) return TIERS[i];
+    }
+    return TIERS[TIERS.length - 1] || null;
+  }
+
+  /*
+   * 자리마다 후보를 줄 세웁니다.
+   *
+   * 벤치 배정(benchFor)과 다른 점 — benchFor는 한 사람이 한 자리만 맡도록
+   * 전체를 최적화합니다. 여기서는 "이 자리에 누가 들어올 수 있나"를 자리별로
+   * 따로 봅니다. 같은 선수가 두 자리의 후보로 나오는 것이 맞습니다.
+   */
+  function squadTiers(input) {
+    var base = input && input.base ? input.base : baseTactic(input || {});
+    if (!base) return null;
+    var all = (input.players || []).map(function (p, i) {
+      var c = Object.assign({}, p);
+      c._id = p.id || ('p' + i);
+      c.positions = p.positions || [];
+      c.attrs = p.attrs || {};
+      return c;
+    });
+    var pool = splitAvailable(all).available;
+    var cache = {};
+    function fitOf(player, role, duty, slotPos) {
+      var k = player._id + '|' + role.id + '|' + duty + '|' + slotPos;
+      if (cache[k] === undefined) {
+        var proxy = Object.create(role);
+        proxy._slotPos = slotPos;
+        cache[k] = roleFit(player, proxy, duty);
+      }
+      return cache[k];
+    }
+
+    var starterIds = {};
+    base.xi.lineup.forEach(function (l) { if (l.player) starterIds[l.player._id] = 1; });
+
+    var slots = base.xi.lineup.map(function (l) {
+      var starterFit = l.player ? Math.round(fitOf(l.player, l.role, l.duty, l.slot.pos).score) : null;
+      var alts = pool.filter(function (p) {
+        return !l.player || p._id !== l.player._id;
+      }).map(function (p) {
+        var f = Math.round(fitOf(p, l.role, l.duty, l.slot.pos).score);
+        var gap = starterFit === null ? 0 : starterFit - f;
+        return {
+          player: p, name: p.name, fit: f, gap: gap,
+          tier: tierFor(Math.max(0, gap)),
+          starterElsewhere: !!starterIds[p._id],
+          cond: typeof p.cond === 'number' ? p.cond : null,
+          band: condBand(p.cond),
+          age: p.age || null, mins: typeof p.mins === 'number' ? p.mins : null
+        };
+      }).sort(function (a, b) { return b.fit - a.fit; });
+
+      /*
+       * 다른 자리의 주전을 '대체 자원'으로 세면 뎁스가 실제보다 두껍게 보입니다.
+       * 그 사람을 여기로 옮기면 원래 자리가 비니까요. 그래서 등급 판정은
+       * 선발이 아닌 선수 중에서만 합니다.
+       */
+      var free = alts.filter(function (a) { return !a.starterElsewhere; });
+      var best = free[0] || null;
+      return {
+        slot: l.slot, pos: l.slot.pos, posKo: posKo(l.slot.pos),
+        role: l.role, duty: l.duty,
+        starter: l.player ? {
+          name: l.player.name, fit: starterFit,
+          cond: typeof l.player.cond === 'number' ? l.player.cond : null,
+          band: condBand(l.player.cond),
+          age: l.player.age || null,
+          mins: typeof l.player.mins === 'number' ? l.player.mins : null,
+          sharp: typeof l.player.sharp === 'number' ? l.player.sharp : null
+        } : null,
+        alts: alts.slice(0, 4),
+        backup: best,
+        tier: best ? best.tier : tierFor(Infinity)
+      };
+    });
+
+    var counts = {};
+    TIERS.forEach(function (t) { counts[t.id] = 0; });
+    slots.forEach(function (s) { counts[s.tier.id]++; });
+
+    /*
+     * 같은 사람이 여러 자리의 대체 자원으로 잡히는 것은 맞는 계산입니다 —
+     * 그 자리에 누가 들어올 수 있느냐를 자리별로 보니까요. 그런데 "대체 자원이
+     * 있는 자리 7곳"만 말하면 사람이 일곱 명 있는 것처럼 읽힙니다. 실제로는
+     * 세 명이 일곱 자리를 겹쳐 맡고 있을 수 있고, 그 셋 중 둘이 같은 주에 빠지면
+     * 메울 수 없습니다. 그래서 겹침을 따로 셉니다.
+     */
+    var covered = slots.filter(function (s) { return s.backup; });
+    var distinct = {};
+    covered.forEach(function (s) { distinct[s.backup.player._id] = 1; });
+    var heads = Object.keys(distinct).length;
+    var overlap = null;
+    if (covered.length && heads < covered.length) {
+      overlap = {
+        slots: covered.length, heads: heads,
+        text: '대체 자원이 있는 ' + covered.length + '자리를 ' + heads + '명이 겹쳐 맡고 있습니다.',
+        fix: heads <= 2
+          ? '이 ' + heads + '명 중 하나만 빠져도 여러 자리가 동시에 비어 있는 상태가 됩니다.'
+          : '같은 주에 둘이 함께 빠지면 메울 수 없는 자리가 생깁니다. 뎁스가 보이는 것보다 얇습니다.'
+      };
+    }
+
+    return { base: base, slots: slots, counts: counts, pool: pool, overlap: overlap };
+  }
+
+  /*
+   * 로테이션 제안.
+   *
+   * 세 가지 이유로만 바꿉니다. 이유 없이 "돌리세요"는 조언이 아닙니다.
+   *   1. 지쳤다 — 컨디션이 낮은 주전을 대신할 사람이 있다
+   *   2. 실전 감각이 없다 — 경기 체력이 바닥인데 계속 벤치에 있다
+   *   3. 어린 선수가 안 뛴다 — 차이가 작은데 출전 시간이 없다
+   *
+   * 그리고 대가를 반드시 같이 냅니다. "몇 점을 잃고 바꾸는 것인가"를 말하지
+   * 않으면 사람이 판단할 수 없습니다.
+   */
+  var TIRED_AT = 85;        // 이 아래면 지친 것으로 봅니다(CONDITION_BANDS의 '보통' 하한)
+  var SWAP_MAX_COST = 12;   // 이보다 많이 잃으면서 쉬게 하지는 않습니다
+  var YOUNG_MAX_COST = 8;   // 성장 목적이면 대가가 더 작아야 합니다
+
+  function rotationPlan(input) {
+    var t = squadTiers(input);
+    if (!t) return null;
+
+    var known = t.slots.filter(function (s) { return s.starter && s.starter.cond !== null; }).length;
+    var total = t.slots.filter(function (s) { return s.starter; }).length;
+    if (!total) return null;
+
+    /*
+     * 컨디션을 모르면 지어내지 않습니다. 전원 100으로 두면 "아무도 안 지쳤다"가
+     * 되어 로테이션이 영원히 안 나옵니다 — 조용히 틀린 답입니다.
+     */
+    if (known === 0) {
+      return {
+        tiers: t, swaps: [], cost: 0, xi: null, known: 0, total: total,
+        blocked: {
+          reason: 'no-condition',
+          text: '선발 중 컨디션을 아는 선수가 없어 로테이션을 짤 수 없습니다.',
+          why: '컨디션을 모르는 채로 "돌리세요"라고 하면 멀쩡한 선수를 빼고 지친 선수를 넣을 수 있습니다.',
+          fix: 'FM 스쿼드 보기에 「컨디션」 열(가능하면 「경기 체력」 · 「출전 시간」도)을 넣어 다시 내보내 가져오세요. 아래에서 손으로 넣어도 됩니다.'
+        }
+      };
+    }
+
+    var taken = {};
+    var swaps = [];
+    t.slots.forEach(function (s) {
+      if (!s.starter) return;
+      var cand = s.alts.filter(function (a) {
+        return !a.starterElsewhere && !taken[a.player._id] && a.fit !== null;
+      });
+      if (!cand.length) return;
+
+      var st = s.starter;
+      var reason = null, limit = SWAP_MAX_COST;
+
+      if (st.cond !== null && st.cond < TIRED_AT) reason = 'tired';
+
+      /*
+       * 지친 주전이 없더라도, 차이가 거의 없는 어린 선수가 아예 안 뛰고 있으면
+       * 그건 따로 말해 줄 값어치가 있습니다. FM에서 출전 시간은 성장 그 자체입니다.
+       */
+      var young = null;
+      if (!reason) {
+        young = cand.filter(function (a) {
+          return a.age !== null && a.age <= 21 && a.gap <= YOUNG_MAX_COST
+            && a.mins !== null && (st.mins === null || a.mins * 3 < st.mins);
+        })[0] || null;
+        if (young) { reason = 'young'; limit = YOUNG_MAX_COST; }
+      }
+      if (!reason) return;
+
+      /*
+       * 들어올 사람도 뛸 상태여야 합니다.
+       *
+       * 처음에는 '지쳤다' 경로에서만 컨디션을 봤습니다. 그랬더니 무작위 검사에서
+       * 컨디션 99인 주전을 빼고 76인 유망주를 넣는 조언이 나왔습니다 — 출전
+       * 시간만 보고 고른 탓입니다. 어느 이유로 바꾸든 지친 선수를 넣지는 않습니다.
+       */
+      var pick = (reason === 'young' ? [young] : cand).filter(function (a) {
+        if (a.gap > limit) return false;
+        if (a.cond === null) return true;                  // 모르면 막지 않습니다
+        if (a.cond < TIRED_AT) return false;               // 지친 선수를 넣지 않습니다
+        if (reason !== 'tired') return true;
+        return st.cond === null || a.cond > st.cond;       // 쉬게 하려면 더 나은 상태여야 합니다
+      })[0];
+      if (!pick) {
+        if (reason === 'tired') {
+          swaps.push({
+            kind: 'hold', pos: s.pos, posKo: s.posKo, slot: s.slot,
+            out: st, in: null, cost: null,
+            text: st.name + eun(st.name) + ' 컨디션 ' + st.cond + '인데 대신할 사람이 없습니다.',
+            why: s.tier.id === 'none'
+              ? '이 자리는 대체 자원이 아예 없습니다.'
+              : '쓸 만한 후보가 있어도 그쪽이 더 지쳤거나 차이가 너무 큽니다(허용 ' + limit + '점).',
+            fix: '그대로 쓰되 후반 60~70분에 교체를 예약해 두세요. 다음 이적시장에서 이 자리 뎁스를 봐야 합니다.'
+          });
+        }
+        return;
+      }
+
+      taken[pick.player._id] = 1;
+      swaps.push({
+        kind: 'swap', reason: reason, pos: s.pos, posKo: s.posKo, slot: s.slot,
+        out: st, in: pick, cost: Math.max(0, pick.gap),
+        text: st.name + ' → ' + pick.name + ' (' + s.posKo + ' · ' + s.role.ko + ')',
+        why: reason === 'tired'
+          ? st.name + '의 컨디션이 ' + st.cond + '입니다' + (pick.cond !== null ? ' (' + pick.name + ' ' + pick.cond + ')' : '')
+            + ' — 이 상태로 90분을 더 뛰면 다음 경기까지 잃습니다.'
+          : pick.name + '(' + pick.age + '세)의 출전 시간이 ' + pick.mins + '분입니다'
+            + (st.mins !== null ? ' (' + st.name + ' ' + st.mins + '분)' : '')
+            + ' — 차이가 ' + Math.max(0, pick.gap) + '점뿐인데 안 뛰면 성장하지 않습니다.',
+        // 경기 체력이 낮은 선수가 들어가면 그 출전이 감각 회복이기도 합니다.
+        sharpNote: (pick.player && typeof pick.player.sharp === 'number' && pick.player.sharp < 60)
+          ? pick.name + '의 경기 체력이 ' + pick.player.sharp + '%입니다 — 이 출전이 실전 감각 회복도 됩니다.'
+          : '',
+        fix: pick.gap <= 4
+          ? '적합도 차이가 ' + Math.max(0, pick.gap) + '점입니다 — 사실상 전력 손실이 없습니다.'
+          : '적합도 ' + st.fit + ' → ' + pick.fit + ro(pick.fit) + ' ' + Math.max(0, pick.gap) + '점 내려갑니다. 상대가 약하면 감수할 만합니다.'
+      });
+    });
+
+    var applied = swaps.filter(function (s) { return s.kind === 'swap'; });
+    var cost = applied.reduce(function (n, s) { return n + s.cost; }, 0);
+
+    // 실제로 바꾼 11명 — 화면에 그대로 그릴 수 있게 lineup 모양을 맞춥니다.
+    var byPos = {};
+    applied.forEach(function (s) { byPos[s.slot.id || s.slot.pos] = s; });
+    var xi = t.base.xi.lineup.map(function (l) {
+      var sw = byPos[l.slot.id || l.slot.pos];
+      if (!sw) return l;
+      return Object.assign({}, l, { player: sw.in.player, fit: sw.in.fit, rotated: true });
+    });
+
+    return {
+      tiers: t, swaps: swaps, applied: applied, cost: Math.round(cost),
+      xi: applied.length ? { formation: t.base.xi.formation, lineup: xi } : null,
+      known: known, total: total, blocked: null
+    };
+  }
+
   function baseTactic(input) {
     var players = (input.players || []).map(function (p, i) {
       var c = Object.assign({}, p);
@@ -3281,6 +3550,10 @@
     trainingPlan: trainingPlan,
     pickTactic: pickTactic,
     slotAudit: slotAudit,
+    squadTiers: squadTiers,
+    rotationPlan: rotationPlan,
+    condBand: condBand,
+    TIRED_AT: TIRED_AT,
     NEW_TACTIC_GAP: NEW_TACTIC_GAP,
     MAX_SLOTS: MAX_SLOTS,
     traitAdjust: traitAdjust,
