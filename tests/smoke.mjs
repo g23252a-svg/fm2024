@@ -2284,6 +2284,392 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(tallSp.weakDefence, null, '제공권이 좋은데 수비 경고가 나왔다');
 }
 
+// ── 경기 후 검토 ──────────────────────────────────────────────────────────
+/*
+ * 한 경기의 결정력 부족은 운이고, 여섯 경기의 결정력 부족은 스쿼드다.
+ * 그 둘을 가르는 것이 이 화면의 전부이므로, 표본이 모자랄 때 단정하지 않는 것이
+ * 가장 중요한 성질이다 — 세 경기 보고 스트라이커를 파는 것이 가장 비싼 실수다.
+ */
+{
+  // 데이터 정합성
+  for (const t of TD.MATCH_TAGS) {
+    assert.ok(t.id && t.ko, `경기 태그 ${t.id}에 이름이 빠졌다`);
+    assert.ok(t.repeat && t.repeat.length > 10, `${t.id}에 반복될 때 할 말이 없다`);
+    assert.ok(t.fix && t.fix.length > 10, `${t.id}에 무엇을 하면 되는지가 없다`);
+  }
+  const tagIds = TD.MATCH_TAGS.map((t) => t.id);
+  assert.equal(new Set(tagIds).size, tagIds.length, '경기 태그 id가 겹친다');
+
+  const g = (gf, ga, o = {}) => ({
+    id: 'm' + Math.random(), opp: o.opp || '상대', venue: o.venue || 'home',
+    gf, ga, flags: o.flags || [],
+    us: o.xg === undefined ? null
+      : { xg: o.xg, shots: o.shots ?? 15, possession: o.poss ?? 58, sot: o.sot ?? 5 },
+    them: o.xga === undefined ? null : { xg: o.xga }
+  });
+  const kinds = (r) => new Set(r.findings.map((f) => f.kind));
+
+  assert.equal(E.matchReview([]), null);
+  assert.equal(E.matchReview(null), null);
+  // 점수가 없는 기록은 세지 않는다 — 저장이 반쯤 깨져도 통계가 오염되면 안 된다
+  assert.equal(E.matchReview([{ id: 'x', venue: 'home' }]), null);
+
+  // 전적 계산
+  const rec = E.matchReview([g(2, 0), g(1, 1), g(0, 3)]).record;
+  assert.deepEqual([rec.n, rec.w, rec.d, rec.l, rec.gf, rec.ga, rec.pts], [3, 1, 1, 1, 3, 4, 4]);
+
+  /*
+   * 표본이 모자라면 판정하지 않는다. 이게 이 화면에서 가장 중요한 성질이다.
+   */
+  const few = E.matchReview([g(0, 1, { xg: 2.4 }), g(0, 0, { xg: 2.1 })]);
+  assert.ok(kinds(few).has('small-sample'), '두 경기로 마무리를 판정했다');
+  assert.ok(!kinds(few).has('finishing-bad'), '표본이 모자란데 단정했다');
+  assert.ok(/비싼 실수|넘겨야/.test(few.findings.find((f) => f.kind === 'small-sample').fix));
+
+  // 기대 득점이 아예 없으면 그 사실을 말한다
+  const noXg = E.matchReview([g(1, 0), g(0, 2), g(1, 1), g(2, 2), g(0, 1)]);
+  assert.ok(kinds(noXg).has('no-xg'), '기대 득점이 없는데 아무 말도 안 했다');
+  assert.ok(!kinds(noXg).has('finishing-bad'));
+  assert.equal(noXg.stats.xgFor, null);
+
+  /*
+   * 여섯 경기 누적으로 크게 밑돌면 그때는 단정한다. 그리고 왜 그렇게
+   * 판정했는지(계산 근거)를 반드시 같이 낸다 — 숫자만 던지면 믿을 근거가 없다.
+   */
+  const cold = E.matchReview([
+    g(0, 1, { xg: 2.4 }), g(0, 0, { xg: 2.1 }), g(1, 2, { xg: 2.6 }),
+    g(0, 1, { xg: 1.9 }), g(1, 1, { xg: 2.2 }), g(0, 2, { xg: 2.0 })
+  ]);
+  const bad = cold.findings.find((f) => f.kind === 'finishing-bad');
+  assert.ok(bad, `여섯 경기 xG 13.2에 2골인데 판정을 안 했다: ${[...kinds(cold)].join(',')}`);
+  assert.equal(bad.level, 'high');
+  assert.ok(bad.detail && /√경기수/.test(bad.detail), '계산 근거가 없다');
+  assert.ok(/마무리|침착성/.test(bad.fix), '무엇을 봐야 하는지가 없다');
+  assert.ok(cold.stats.z < -1.5, `z가 ${cold.stats.z}다`);
+
+  /*
+   * 기록이 없는 경기가 섞여도 판정이 흔들리면 안 된다.
+   * 기대 득점이 있는 경기로만 나눠야 하는데 전체 경기 수로 나누면 표본이 커 보여
+   * z가 작아지고, "운의 범위 안"이라는 반대 결론이 나온다.
+   */
+  const mixed = E.matchReview([
+    g(0, 1, { xg: 2.4 }), g(0, 0, { xg: 2.1 }), g(1, 2, { xg: 2.6 }),
+    g(0, 1, { xg: 1.9 }), g(1, 1, { xg: 2.2 }), g(0, 2, { xg: 2.0 }),
+    g(1, 0), g(2, 1), g(0, 0), g(1, 3)     // 기록 없이 점수만 저장한 경기
+  ]);
+  assert.equal(mixed.record.n, 10, '경기 수는 전체를 세야 한다');
+  assert.equal(mixed.stats.sample, 6, '기대 득점이 있는 경기만 표본으로 세야 한다');
+  assert.equal(mixed.stats.z, cold.stats.z,
+    `기록 없는 경기가 마무리 판정을 흔들었다: ${mixed.stats.z} vs ${cold.stats.z}`);
+  const mixedBad = mixed.findings.find((f) => f.kind === 'finishing-bad');
+  assert.ok(mixedBad, '기록 없는 경기가 섞이자 판정이 사라졌다');
+  assert.ok(/^6경기/.test(mixedBad.text), `표본 수를 10경기로 말했다: ${mixedBad.text}`);
+
+  // 만드는 만큼 넣고 있으면 문제라고 하지 않는다
+  const fine = E.matchReview([
+    g(2, 1, { xg: 2.0 }), g(1, 0, { xg: 1.2 }), g(2, 2, { xg: 1.8 }),
+    g(3, 1, { xg: 2.4 }), g(1, 1, { xg: 1.4 })
+  ]);
+  assert.ok(kinds(fine).has('finishing-ok'), `정상 범위인데 문제라고 했다: ${[...kinds(fine)].join(',')}`);
+  assert.ok(!kinds(fine).has('finishing-bad'));
+
+  // 반대로 기대치를 크게 넘고 있으면 그것도 말해야 한다 — 곧 되돌아온다
+  const hot = E.matchReview([
+    g(3, 0, { xg: 1.0 }), g(2, 1, { xg: 0.8 }), g(4, 1, { xg: 1.4 }),
+    g(2, 0, { xg: 0.9 }), g(3, 2, { xg: 1.1 })
+  ]);
+  assert.ok(kinds(hot).has('finishing-hot'), '기대치를 한참 넘는데 아무 말도 안 했다');
+  assert.ok(/되돌아/.test(hot.findings.find((f) => f.kind === 'finishing-hot').fix));
+
+  /*
+   * 기회의 질 — 같은 xG 2.0이라도 슈팅 10개와 25개는 다른 경기다.
+   * 경기 중 규칙과 같은 기준(슈팅당 0.08)을 써야 두 화면이 어긋나지 않는다.
+   */
+  const farShots = E.matchReview([
+    g(0, 1, { xg: 1.2, shots: 25 }), g(1, 1, { xg: 1.0, shots: 22 }),
+    g(0, 0, { xg: 1.1, shots: 24 }), g(1, 2, { xg: 1.3, shots: 26 })
+  ]);
+  assert.ok(kinds(farShots).has('far-shots'), '슈팅당 0.05인데 먼 거리 경고가 없다');
+  assert.ok(/박스 안까지 볼 배급/.test(farShots.findings.find((f) => f.kind === 'far-shots').fix),
+    '경기 중 탭과 같은 지시 이름을 안 썼다');
+  assert.ok(farShots.stats.perShot <= 0.08);
+
+  const closeShots = E.matchReview([
+    g(2, 1, { xg: 2.0, shots: 12 }), g(1, 0, { xg: 1.6, shots: 10 }),
+    g(1, 1, { xg: 1.8, shots: 11 }), g(2, 2, { xg: 2.2, shots: 13 })
+  ]);
+  assert.ok(kinds(closeShots).has('good-shots'));
+  assert.ok(!kinds(closeShots).has('far-shots'));
+
+  /*
+   * 수비 — 실점이 기대 실점을 크게 넘는 것과, 기대 실점 자체가 높은 것은
+   * 정반대의 처방이다(골키퍼 vs 형태). 둘을 섞으면 조언이 무의미해진다.
+   */
+  const keeper = E.matchReview([
+    g(1, 3, { xg: 1.5, xga: 0.9 }), g(1, 2, { xg: 1.4, xga: 0.7 }),
+    g(0, 3, { xg: 1.3, xga: 1.0 }), g(2, 3, { xg: 1.6, xga: 0.8 }),
+    g(1, 2, { xg: 1.5, xga: 0.6 })
+  ]);
+  assert.ok(kinds(keeper).has('keeper'), '내주는 기회에 비해 훨씬 많이 먹는데 아무 말도 안 했다');
+  assert.ok(/골키퍼/.test(keeper.findings.find((f) => f.kind === 'keeper').fix));
+  assert.ok(!kinds(keeper).has('defence-shape'), '기대 실점은 낮은데 형태 문제라고 했다');
+
+  const leaky = E.matchReview([
+    g(2, 2, { xg: 1.8, xga: 2.1 }), g(1, 2, { xg: 1.5, xga: 1.9 }),
+    g(2, 1, { xg: 1.7, xga: 1.6 }), g(1, 2, { xg: 1.6, xga: 2.2 }),
+    g(2, 2, { xg: 1.9, xga: 1.8 })
+  ]);
+  assert.ok(kinds(leaky).has('defence-shape'), '경기당 기대 실점 1.9인데 형태 얘기가 없다');
+
+  // 내려앉은 상대를 반복해서 못 여는 경우 — 경기 중 규칙과 같은 기준
+  const parked = E.matchReview([
+    g(0, 0, { xg: 0.9, poss: 66, sot: 2 }), g(0, 1, { xg: 0.8, poss: 63, sot: 3 }),
+    g(1, 1, { xg: 1.0, poss: 61, sot: 3 }), g(0, 1, { xg: 0.7, poss: 65, sot: 2 })
+  ]);
+  assert.ok(kinds(parked).has('parked-repeat'), '점유율 64%에 유효슈팅 2.5개인데 아무 말도 안 했다');
+
+  /*
+   * 태그는 반복될 때만 말한다. 한 번 일어난 일을 '패턴'이라고 하면
+   * 사용자가 도구를 믿지 않게 된다.
+   */
+  const once = E.matchReview([
+    g(0, 1, { flags: ['setpiece-concede'] }), g(1, 0), g(2, 1), g(1, 1), g(0, 0)
+  ]);
+  assert.ok(!kinds(once).has('tag-setpiece-concede'), '한 번 나온 일을 반복이라고 했다');
+
+  const repeated = E.matchReview([
+    g(0, 1, { flags: ['early-concede'] }), g(1, 2, { flags: ['early-concede'] }),
+    g(0, 2, { flags: ['early-concede'] }), g(1, 1), g(2, 0)
+  ]);
+  const tagFinding = repeated.findings.find((f) => f.kind === 'tag-early-concede');
+  assert.ok(tagFinding, '다섯 경기 중 세 번 초반 실점인데 아무 말도 안 했다');
+  assert.equal(tagFinding.level, 'high');
+  assert.ok(/3경기/.test(tagFinding.text), '몇 번인지 안 말했다');
+
+  /*
+   * 홈이 원정보다 크게 나쁘면 짚는다 — 내려앉은 상대를 못 여는 신호다.
+   * 다만 마무리와 같은 표본 기준을 넘겨야 한다. 세 경기씩으로 홈 경기 방식을
+   * 뜯어고치라고 하면 그건 판정이 아니라 소음이다.
+   */
+  const homeFew = E.matchReview([
+    g(0, 1, { venue: 'home' }), g(0, 0, { venue: 'home' }), g(1, 2, { venue: 'home' }),
+    g(2, 0, { venue: 'away' }), g(3, 1, { venue: 'away' }), g(1, 0, { venue: 'away' })
+  ]);
+  assert.ok(!kinds(homeFew).has('home-worse'), '한쪽 세 경기로 홈/원정을 단정했다');
+
+  const homeBad = E.matchReview([
+    g(0, 1, { venue: 'home' }), g(0, 0, { venue: 'home' }), g(1, 2, { venue: 'home' }), g(0, 2, { venue: 'home' }),
+    g(2, 0, { venue: 'away' }), g(3, 1, { venue: 'away' }), g(1, 0, { venue: 'away' }), g(2, 1, { venue: 'away' })
+  ]);
+  assert.ok(kinds(homeBad).has('home-worse'), '홈 4경기 0점 원정 4경기 3점인데 아무 말도 안 했다');
+  assert.ok(/홈 4경기/.test(homeBad.findings.find((f) => f.kind === 'home-worse').text),
+    '표본 크기를 안 말했다');
+
+  /*
+   * 서로 다른 경기 묶음에서 뽑은 숫자를 한 문장에 넣으면, 그 문장은 어느 경기에
+   * 대해서도 참이 아니다. 아래 셋은 전부 그 실수를 막는 검사다.
+   */
+
+  // 1) 상대 기대 실점은 우리 기대 득점과 독립이어야 한다
+  const onlyTheirs = E.matchReview([
+    g(1, 3, { xga: 0.9 }), g(1, 2, { xga: 0.7 }), g(0, 3, { xga: 1.0 }),
+    g(2, 3, { xga: 0.8 }), g(1, 2, { xga: 0.6 })
+  ]);
+  assert.equal(onlyTheirs.stats.sampleAgainst, 5,
+    '우리 기대 득점이 없다고 상대 기대 실점까지 버렸다');
+  assert.ok(kinds(onlyTheirs).has('keeper'), '상대 기대 실점만 있어도 수비 판정은 나와야 한다');
+
+  // 2) 점유율과 유효 슈팅이 서로 다른 경기에서만 나오면 내려앉음 판정을 하면 안 된다
+  const disjoint = E.matchReview([
+    { id: 'a', gf: 0, ga: 1, venue: 'home', us: { possession: 70 } },
+    { id: 'b', gf: 0, ga: 1, venue: 'home', us: { possession: 72 } },
+    { id: 'c', gf: 0, ga: 1, venue: 'home', us: { possession: 68 } },
+    { id: 'd', gf: 0, ga: 1, venue: 'away', us: { sot: 2 } },
+    { id: 'e', gf: 0, ga: 1, venue: 'away', us: { sot: 3 } },
+    { id: 'f', gf: 0, ga: 1, venue: 'away', us: { sot: 2 } }
+  ]);
+  assert.ok(!kinds(disjoint).has('parked-repeat'),
+    '점유율과 유효 슈팅이 같이 있는 경기가 하나도 없는데 내려앉음이라고 단정했다');
+  assert.equal(disjoint.stats.sampleParked, 0);
+
+  // 3) 슈팅 기록이 일부 경기에만 있으면 그 경기 수를 밝혀야 한다
+  const someShots = E.matchReview([
+    g(0, 1, { xg: 0.8, shots: 12 }), g(0, 1, { xg: 0.8, shots: 12 }),
+    g(0, 1, { xg: 0.8, shots: 12 }), g(0, 1, { xg: 0.8, shots: 12 }),
+    { id: 'x', gf: 1, ga: 0, venue: 'home', us: { xg: 2.0 } },
+    { id: 'y', gf: 1, ga: 0, venue: 'home', us: { xg: 2.0 } }
+  ]);
+  assert.equal(someShots.stats.sampleShots, 4);
+  assert.equal(someShots.stats.sample, 6);
+  const fs2 = someShots.findings.find((f) => f.kind === 'far-shots');
+  assert.ok(fs2, '슈팅당 0.067인데 경고가 없다');
+  assert.ok(/슈팅 기록이 있는 4경기/.test(fs2.text),
+    `어느 경기에서 나온 숫자인지 안 밝혔다: ${fs2.text}`);
+
+  /*
+   * 반올림한 값으로 다시 계산하면 경계에서 판정이 뒤집힌다.
+   * 기대 득점 0.99 × 4 = 3.96인데 4.0으로 반올림한 뒤 z를 구하면 딱 −1.5가 되어
+   * "운이 아니다"로 넘어간다. 실제로는 −1.48이다.
+   */
+  const edge = E.matchReview([
+    g(0, 1, { xg: 0.99 }), g(1, 0, { xg: 0.99 }), g(0, 0, { xg: 0.99 }), g(0, 1, { xg: 0.99 })
+  ]);
+  assert.equal(edge.stats.z, -1.48, `반올림한 값으로 z를 구했다: ${edge.stats.z}`);
+  assert.ok(!kinds(edge).has('finishing-bad'), '경계에서 반올림 때문에 판정이 뒤집혔다');
+  assert.ok(kinds(edge).has('finishing-soft'));
+
+  // 실점 쪽도 같다 — 경기당 1.499는 1.5 미만이다
+  const edgeDef = E.matchReview([
+    g(1, 1, { xga: 1.499 }), g(1, 1, { xga: 1.499 }),
+    g(1, 1, { xga: 1.499 }), g(1, 1, { xga: 1.499 })
+  ]);
+  assert.ok(!kinds(edgeDef).has('defence-shape'),
+    `경기당 ${edgeDef.stats.xgaPer}인데 1.5 기준에 걸렸다`);
+
+  /*
+   * 골키퍼 문제와 형태 문제는 정반대의 처방이라, 둘 다 걸리면 서로를 부정하는
+   * 문장 두 개가 나란히 뜬다. 그때는 무엇을 먼저 할지까지 말해야 한다.
+   */
+  const both = E.matchReview([
+    g(1, 4, { xga: 1.8 }), g(1, 4, { xga: 1.9 }), g(0, 4, { xga: 1.7 }),
+    g(2, 5, { xga: 2.0 }), g(1, 4, { xga: 1.8 })
+  ]);
+  if (kinds(both).has('keeper') && kinds(both).has('defence-shape')) {
+    const k2 = both.findings.find((f) => f.kind === 'keeper');
+    assert.ok(/별개|먼저/.test(k2.fix), `서로 부정하는 조언 둘을 나란히 냈다: ${k2.fix}`);
+    assert.ok(!/형태를 아무리 고쳐도/.test(k2.fix), '형태를 고치라는 조언 옆에서 소용없다고 했다');
+  }
+
+  // 태그를 한 경기에 여러 번 붙여도 경기 수로 센다
+  const dupTags = E.matchReview([
+    { id: 'a', gf: 0, ga: 1, venue: 'home', flags: ['red-card', 'red-card', 'red-card', 'red-card'] },
+    { id: 'b', gf: 1, ga: 0, venue: 'away', flags: [] },
+    { id: 'c', gf: 1, ga: 1, venue: 'home', flags: [] },
+    { id: 'd', gf: 0, ga: 2, venue: 'away', flags: [] }
+  ]);
+  assert.equal(dupTags.tagCount['red-card'], 1, '한 경기의 같은 태그를 여러 번 셌다');
+  assert.ok(!kinds(dupTags).has('tag-red-card'), '한 경기짜리를 반복이라고 했다');
+
+  // 표본이 모자라면 태그도 단정하지 않는다 — 옆에서 "판정할 수 없다"고 말하는 중이다
+  const twoTagged = E.matchReview([
+    g(0, 1, { flags: ['setpiece-concede'] }), g(0, 2, { flags: ['setpiece-concede'] })
+  ]);
+  assert.ok(!kinds(twoTagged).has('tag-setpiece-concede'),
+    '두 경기로 「반복됩니다」라고 했다 — 같은 화면이 아직 판정할 수 없다고 말하는 중이다');
+
+  // 경기별 표
+  const pm = cold.perMatch;
+  assert.equal(pm.length, 6);
+  for (const m of pm) {
+    assert.ok(['w', 'd', 'l'].includes(m.result), `결과가 ${m.result}다`);
+    assert.ok(/^\d+:\d+$/.test(m.score));
+    assert.ok(['홈', '원정', '—'].includes(m.venue));
+    assert.ok(m.id, '경기별 표에 id가 없다 — 순서로 지우면 엉뚱한 경기가 지워진다');
+  }
+  // 장소를 모르면 홈이라고 지어내지 않는다
+  assert.equal(E.matchReview([{ id: 'z', gf: 1, ga: 0 }]).perMatch[0].venue, '—');
+
+  // 문장 검사
+  for (const r of [few, noXg, cold, mixed, fine, hot, farShots, closeShots, keeper, leaky, parked,
+                   repeated, homeFew, homeBad, onlyTheirs, disjoint, someShots, edge, edgeDef, both, dupTags, twoTagged]) {
+    for (const f of r.findings) {
+      assert.ok(f.text && f.text.length > 8, `${f.kind}에 설명이 없다`);
+      assert.ok(['high', 'note', 'good'].includes(f.level), `${f.kind}의 알 수 없는 등급 ${f.level}`);
+      assert.ok(!/NaN|undefined|\[object |Infinity|[은는이가을를와과]\([은는이가을를와과]\)/
+        .test(f.text + f.fix + (f.detail || '')),
+        `${f.kind}에 이상한 값이 있다: ${f.text} / ${f.fix} / ${f.detail}`);
+    }
+  }
+}
+
+// ── 손으로 친 경기 기록도 읽는다 ──────────────────────────────────────────
+/*
+ * 「경기 중」 탭에 기록 입력 기능은 있었지만 FM이 내보낸 표 형식만 읽었다.
+ * 경기가 끝난 뒤 숫자 네 개만 기억나는 경우가 훨씬 많은데 그때는 통째로 실패했다 —
+ * 기능이 있는데 못 쓰는 상태였다.
+ */
+{
+  const want = { shots: 18, sot: 6, xg: 2.4, possession: 64 };
+  const wantThem = { shots: 5, sot: 2, xg: 0.6, possession: 36 };
+  const forms = [
+    ['FM 표', '18\t슈팅\t5\n6\t유효 슈팅\t2\n2.4\t기대 득점\t0.6\n64\t점유율\t36'],
+    ['타이핑', '슈팅 18 5\n유효 슈팅 6 2\n기대 득점 2.4 0.6\n점유율 64 36'],
+    ['콜론과 줄표', '슈팅: 18 - 5\n유효 슈팅: 6 - 2\nxG: 2.4 - 0.6\n점유율: 64% - 36%'],
+    ['「대」로 구분', '슈팅 18 대 5\n유효 슈팅 6 대 2\n기대 득점 2.4 대 0.6\n점유율 64 대 36'],
+    ['FM 순서에 공백', '18 슈팅 5\n6 유효 슈팅 2\n2.4 기대 득점 0.6\n64 점유율 36']
+  ];
+  for (const [label, text] of forms) {
+    const r = IMP.parseMatchStats(text);
+    assert.equal(r.error, null, `${label}: ${r.error}`);
+    for (const [k, v] of Object.entries(want)) {
+      assert.equal(r.left[k], v, `${label}: 우리 ${k}가 ${r.left[k]}다`);
+    }
+    for (const [k, v] of Object.entries(wantThem)) {
+      assert.equal(r.right[k], v, `${label}: 상대 ${k}가 ${r.right[k]}다`);
+    }
+  }
+
+  // '기대 득점'의 '대'를 구분자로 잘못 읽으면 항목 자체가 사라진다
+  const xgOnly = IMP.parseMatchStats('기대 득점 2.4 0.6');
+  assert.equal(xgOnly.left.xg, 2.4, '「기대 득점」의 대를 구분자로 읽었다');
+
+  // 우리 값만 넣어도 읽어야 한다
+  const half = IMP.parseMatchStats('슈팅 18\n기대 득점 2.4');
+  assert.equal(half.left.shots, 18);
+  assert.equal(half.right.shots, null);
+
+  /*
+   * FM이 실제로 내보내는 모양과 사람이 치는 모양은 둘 다 지저분하다.
+   * 아래는 전부 "지어내지 않는다"를 지키는 검사다 — 못 읽는 것보다 잘못 읽는 것이
+   * 훨씬 나쁘다. 잘못 읽은 값은 그대로 경기 후 통계에 쌓인다.
+   */
+  // 괄호 안 내역을 값으로 세면 상대 값이 통째로 바뀐다
+  const paren = IMP.parseMatchStats('패스 성공 90% (180/199) 93% (234/251)');
+  assert.equal(paren.left.passPct, 90);
+  assert.equal(paren.right.passPct, 93, `괄호 안 숫자를 상대 값으로 읽었다: ${paren.right.passPct}`);
+
+  // '64%-36%'의 하이픈을 빼기 기호로 읽으면 점유율이 음수가 된다
+  const pct = IMP.parseMatchStats('점유율 64%-36%');
+  assert.equal(pct.right.possession, 36, `상대 점유율이 ${pct.right.possession}이다`);
+
+  // 천 단위 쉼표와 유럽식 소수점을 구분한다
+  const commas = IMP.parseMatchStats('패스 성공 1,234 1,102\n기대 득점 2,4 0,6');
+  assert.equal(commas.left.passPct, 1234);
+  assert.equal(commas.left.xg, 2.4, `유럽식 소수점을 못 읽었다: ${commas.left.xg}`);
+
+  // 숫자가 셋 이상이면 어느 것이 우리 값인지 알 수 없으므로 버린다
+  assert.ok(IMP.parseMatchStats('슈팅 18 5 9').error, '숫자 세 개짜리 줄을 멋대로 읽었다');
+
+  // 항목 이름에 구분 기호가 남아 화면에 그대로 나가면 안 된다
+  const lbl = IMP.parseMatchStats('점유율: 64% - 36%');
+  assert.equal(lbl.rows[0].label, '점유율', `항목 이름에 기호가 남았다: "${lbl.rows[0].label}"`);
+
+  // 같은 항목이 여러 줄에 나오면 표를 읽는 쪽과 같은 규칙(마지막 줄)을 쓴다
+  const dupLine = IMP.parseMatchStats('태클 24 19\n태클 성공 12 9');
+  const dupTable = IMP.parseMatchStats('24\t태클\t19\n12\t태클 성공\t9');
+  assert.equal(dupLine.left.tackles, dupTable.left.tackles,
+    `같은 데이터인데 표와 줄이 다른 값을 냈다: ${dupLine.left.tackles} vs ${dupTable.left.tackles}`);
+
+  // 프로토타입 이름이 항목으로 잡히면 안 된다
+  const proto = IMP.parseMatchStats('constructor 1 2');
+  assert.ok(proto.error, 'constructor를 통계 항목으로 읽었다');
+  assert.equal(proto.rows.length, 0);
+  for (const r of [paren, pct, commas, lbl, dupLine]) {
+    for (const row of r.rows) {
+      assert.equal(typeof row.id, 'string', `항목 id가 문자열이 아니다: ${typeof row.id}`);
+    }
+  }
+
+  // 아무 말이나 넣으면 지어내지 않는다
+  const junk = IMP.parseMatchStats('안녕하세요\n오늘 날씨가 좋네요');
+  assert.ok(junk.error, '아무 말이나 넣었는데 통계를 읽었다고 했다');
+  assert.equal(junk.rows.length, 0);
+
+  // 빈 값
+  assert.ok(IMP.parseMatchStats('').error);
+  assert.ok(IMP.parseMatchStats(null).error);
+}
+
 // ── 뎁스와 로테이션 ───────────────────────────────────────────────────────
 /*
  * 「주전 아니면 나머지」로는 로테이션을 말할 수 없다. 적합도 71과 70은 사실상

@@ -374,6 +374,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   <section id="tab-opp" hidden></section>
   <section id="tab-result" hidden></section>
   <section id="tab-match" hidden></section>
+  <section id="tab-review" hidden></section>
   <section id="tab-guide" hidden></section>
 </main>
 
@@ -407,6 +408,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     tactics: [],
     standing: 'mid',
     match: { phase: 'half-time', gf: 0, ga: 0, oppLevel: 'even', flags: [], stats: null, side: 'right' },
+    matches: [],        // 저장한 경기 기록 — 「경기 후」 탭이 누적으로 봅니다
     tab: 'squad',
     editing: null,
     overlay: false,
@@ -422,7 +424,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     try {
       localStorage.setItem(STORE, JSON.stringify({
         players: S.players, opponent: S.opponent, context: S.context,
-        pinnedFormation: S.pinnedFormation, opponentSquad: S.opponentSquad, standing: S.standing, match: S.match, tactics: S.tactics
+        pinnedFormation: S.pinnedFormation, opponentSquad: S.opponentSquad, standing: S.standing, match: S.match,
+        tactics: S.tactics, matches: S.matches
       }));
     } catch (e) { /* 저장 공간이 없어도 이번 세션은 그대로 씁니다 */ }
   }
@@ -439,6 +442,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       if (d.standing) S.standing = d.standing;
       if (d.match) Object.assign(S.match, d.match);
       if (d.tactics) S.tactics = d.tactics;
+      if (Array.isArray(d.matches)) S.matches = d.matches;
     } catch (e) { /* 깨진 저장본은 무시하고 초기 상태로 */ }
   }
 
@@ -477,6 +481,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     { id: 'opp', ko: '상대' },
     { id: 'result', ko: '맞춤 전술' },
     { id: 'match', ko: '경기 중' },
+    { id: 'review', ko: '경기 후' },
     { id: 'guide', ko: '안내' }
   ];
   function renderTabs() {
@@ -3520,7 +3525,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         var v = M.stats[o[0]] || {};
         seg.appendChild(h('button', {
           'aria-pressed': M.side === o[0] ? 'true' : 'false',
-          onclick: function () { M.side = o[0]; save(); render(); }
+          onclick: function () { M.side = o[0]; M.sideChosen = true; save(); render(); }
         }, [o[1] + ' (슈팅 ' + fmtStat(v.shots) + ' · 점유 ' + fmtStat(v.possession) + '%)']));
       });
       box.appendChild(seg);
@@ -3626,8 +3631,229 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ]));
     });
     root.appendChild(ref);
+    root.appendChild(saveMatchCard());
 
     function refreshAdvice() { render(); }
+  };
+
+  /*
+   * ── 경기 저장 ───────────────────────────────────────────────────────────
+   *
+   * 「경기 중」 탭에 이미 점수와 기록이 다 들어 있습니다. 한 번 더 치게 하지 말고
+   * 여기서 그대로 저장합니다. 숫자로 알 수 없는 것(실점 장면이 세트피스였는지
+   * 역습이었는지)만 태그로 받습니다 — 그게 반복되면 전술보다 먼저 고칠 문제입니다.
+   */
+  function saveMatchCard() {
+    var M = S.match;
+    if (!S._newMatch) S._newMatch = { opp: '', venue: 'home', flags: [] };
+    var NM = S._newMatch;
+
+    var card = rememberOpen('saveMatch', h('details', { class: 'card' }));
+    card.appendChild(h('summary', { style: 'cursor:pointer' }, [
+      h('span', { style: 'font-size:15px;font-weight:800', text: '이 경기 기록으로 저장' }),
+      h('span', { class: 'tiny muted', text: '  ' + (S.matches || []).length + '경기 저장됨' })
+    ]));
+    card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px' }, [
+      '한 경기만으로는 운과 실력을 가를 수 없습니다. ',
+      h('b', { style: 'color:var(--text)', text: '기대 득점 2.4에 무득점으로 진 경기는 그 자체로는 아무것도 말해 주지 않습니다' }),
+      ' — 몇 경기가 쌓여야 「경기 후」 탭이 마무리가 진짜 문제인지 판정합니다. 위에 넣은 점수와 기록을 그대로 저장합니다.'
+    ]));
+
+    card.appendChild(h('div', { class: 'grid2' }, [
+      h('div', { class: 'field' }, [
+        h('label', { class: 'f', text: '상대 (선택)' }),
+        h('input', {
+          type: 'text', value: NM.opp, placeholder: '웨스트햄',
+          oninput: function (e) { NM.opp = e.target.value; }
+        })
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', { class: 'f', text: '장소' }),
+        segment([['home', '홈'], ['away', '원정']], NM.venue, function (v) { NM.venue = v; render(); })
+      ])
+    ]));
+
+    var chips = h('div', { class: 'chips', style: 'margin-top:6px' });
+    TD.MATCH_TAGS.forEach(function (t) {
+      chips.appendChild(h('button', {
+        class: 'chip', 'aria-pressed': NM.flags.indexOf(t.id) >= 0 ? 'true' : 'false',
+        title: t.repeat,
+        onclick: function () {
+          var i = NM.flags.indexOf(t.id);
+          if (i >= 0) NM.flags.splice(i, 1); else NM.flags.push(t.id);
+          render();
+        }
+      }, [t.ko]));
+    });
+    card.appendChild(h('label', { class: 'f', style: 'margin-top:9px;display:block', text: '이 경기에 있었던 일 (선택)' }));
+    card.appendChild(chips);
+
+    var hasStats = !!(M.stats && !M.stats.error);
+    card.appendChild(h('div', { class: 'tiny muted', style: 'margin-top:9px',
+      text: hasStats
+        ? '점수 ' + M.gf + ':' + M.ga + ' · 위에 넣은 기록을 함께 저장합니다.'
+        : '점수 ' + M.gf + ':' + M.ga + ' · 기록이 없어 점수만 저장합니다 — 기대 득점이 없으면 마무리를 판정할 수 없습니다.' }));
+
+    card.appendChild(h('div', { class: 'row', style: 'margin-top:9px' }, [
+      h('button', {
+        class: 'btn pri',
+        onclick: function () {
+          /*
+           * 같은 경기를 두 번 저장하는 사고를 막습니다.
+           *
+           * 저장해도 「경기 중」 탭의 점수와 기록은 그대로 남습니다(다음 경기를
+           * 넣기 전까지는 그게 맞습니다). 그래서 버튼을 한 번 더 누르면 같은
+           * 경기가 통계에 두 번 들어가고, 그 순간 누적 판정이 통째로 틀어집니다.
+           */
+          var sig = M.gf + ':' + M.ga + '|' + (hasStats ? JSON.stringify(M.stats[M.side]) : '');
+          var dup = (S.matches || []).some(function (g) {
+            return g && g._sig === sig;
+          });
+          if (dup && !window.confirm('같은 점수와 기록의 경기가 이미 저장돼 있습니다. 또 저장할까요?')) return;
+          /*
+           * 어느 쪽이 우리 팀인지 안 고르고 저장하면 상대 기록이 우리 것으로
+           * 쌓입니다. 되돌릴 방법이 없으므로 저장 전에 한 번 확인합니다.
+           */
+          if (hasStats && !M.sideChosen
+            && !window.confirm('「어느 쪽이 우리 팀인가요?」를 아직 안 고르셨습니다. 지금은 '
+              + (M.side === 'left' ? '왼쪽' : '오른쪽') + '이 우리 팀으로 저장됩니다. 계속할까요?')) return;
+
+          var us = hasStats ? M.stats[M.side] : null;
+          var them = hasStats ? M.stats[M.side === 'left' ? 'right' : 'left'] : null;
+          S.matches = (S.matches || []).concat([{
+            id: 'g' + Date.now(), _sig: sig,
+            opp: NM.opp.trim(), venue: NM.venue,
+            gf: M.gf, ga: M.ga, oppLevel: M.oppLevel,
+            flags: NM.flags.slice(),
+            us: us || null, them: them || null
+          }]);
+          // 다음 경기를 위해 비웁니다 — 지난 경기 태그가 남으면 통계가 오염됩니다.
+          // 장소는 그대로 둡니다. 다음이 원정일 거라고 도구가 알 수 없습니다.
+          S._newMatch = { opp: '', venue: NM.venue, flags: [] };
+          save();
+          S.tab = 'review'; render(); window.scrollTo(0, 0);
+          toast('저장했습니다. 「경기 후」 탭에서 누적으로 봅니다.');
+        }
+      }, ['저장하고 경기 후로 이동'])
+    ]));
+    return card;
+  }
+
+  /*
+   * ── 경기 후 탭 ──────────────────────────────────────────────────────────
+   *
+   * 「경기 중」이 한 경기 안에서 무엇을 건드릴지를 말한다면, 여기는 여러 경기를
+   * 겹쳐 놓고 "그게 반복되는 문제인가"를 봅니다. 둘은 답이 다릅니다 — 한 경기의
+   * 결정력 부족은 운이고, 여섯 경기의 결정력 부족은 스쿼드입니다.
+   */
+  RENDER.review = function (root) {
+    var rv = null;
+    try { rv = E.matchReview(S.matches || []); } catch (e) {
+      root.appendChild(h('div', { class: 'card' }, [h('div', { class: 'rep err', text: '오류: ' + (e && e.message) })]));
+      return;
+    }
+
+    if (!rv) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'empty' }, [
+          h('b', { text: '저장한 경기가 없습니다' }),
+          '「경기 중」 탭에서 점수와 기록을 넣고 맨 아래 「이 경기 기록으로 저장」을 누르면 여기에 쌓입니다. '
+          + '한 경기로는 운과 실력을 가를 수 없어서, 이 화면은 몇 경기가 모여야 답을 냅니다.'
+        ]),
+        h('div', { class: 'row', style: 'justify-content:center' }, [
+          h('button', { class: 'btn pri', onclick: function () { S.tab = 'match'; render(); } }, ['경기 중으로 이동'])
+        ])
+      ]));
+      return;
+    }
+
+    var r = rv.record, st = rv.stats;
+    root.appendChild(h('div', { class: 'card' }, [
+      h('h2', { text: '누적 ' + r.n + '경기' }),
+      h('div', { class: 'summary' }, [
+        summaryCell('전적', r.w + '승 ' + r.d + '무 ' + r.l + '패', ''),
+        summaryCell('득실', r.gf + ' : ' + r.ga, r.gf >= r.ga ? 'var(--acc)' : 'var(--danger)'),
+        summaryCell('경기당 승점', String(r.ppg), 'var(--acc2)'),
+        summaryCell('누적 기대 득점', st.xgFor === null ? '—' : String(st.xgFor), 'var(--acc2)')
+      ]),
+      /*
+       * 숫자마다 나온 경기 묶음이 다릅니다. 하나로 뭉쳐 "N경기 기준"이라고 적으면
+       * 그 문장은 어느 숫자에 대해서도 참이 아닙니다 — 각각 몇 경기에서 나왔는지
+       * 옆에 붙입니다.
+       */
+      h('div', { class: 'small muted', text: st.xgFor === null
+        ? '기대 득점을 넣은 경기가 없습니다 — 마무리 판정에는 그 값이 필요합니다.'
+        : [
+          '누적 기대 득점은 ' + st.sample + '경기 기준',
+          st.perShot === null ? null : '슈팅당 기대 득점 ' + st.perShot + ' (' + st.sampleShots + '경기)',
+          st.possession === null ? null : '평균 점유율 ' + st.possession + '% (' + st.samplePoss + '경기)'
+        ].filter(Boolean).join(' · ') })
+    ]));
+
+    // 판정
+    var fc = h('div', { class: 'card' }, [
+      h('h2', { text: '무엇이 문제인가' }),
+      h('div', { class: 'desc', text: '한 경기가 아니라 누적으로 봅니다. 운으로 설명되는 범위 안이면 그렇다고 말합니다 — 표본이 모자랄 때 스트라이커를 파는 것이 가장 비싼 실수입니다.' })
+    ]);
+    rv.findings.forEach(function (f) {
+      fc.appendChild(h('div', { class: 'warn' + (f.level === 'high' ? ' high' : ''),
+        style: f.level === 'good' ? 'border-color:#2c4a35' : '' }, [
+        h('span', { class: 'ic', text: f.level === 'high' ? '!' : f.level === 'good' ? '✓' : '·' }),
+        h('span', {}, [
+          f.text,
+          f.fix ? h('span', { class: 'fixnote', text: '→ ' + f.fix }) : null,
+          f.detail ? h('span', { class: 'fixnote', style: 'color:var(--dim2)', text: f.detail }) : null
+        ])
+      ]));
+    });
+    root.appendChild(fc);
+
+    // 경기별
+    var lc = h('div', { class: 'card' }, [
+      h('h2', { text: '경기별' }),
+      h('div', { class: 'desc', text: '오른쪽 × 로 지울 수 있습니다. 잘못 저장한 경기 하나가 누적 판정을 통째로 흔듭니다.' })
+    ]);
+    rv.perMatch.forEach(function (m, i) {
+      var col = m.result === 'w' ? 'var(--acc)' : m.result === 'l' ? 'var(--danger)' : 'var(--dim)';
+      lc.appendChild(h('div', {
+        style: 'display:flex;gap:8px;align-items:baseline;padding:6px 0;'
+          + 'border-bottom:1px solid var(--line);font-size:12.5px'
+      }, [
+        h('span', { style: 'flex:0 0 auto;min-width:30px;color:var(--dim2)', text: m.venue }),
+        h('span', {
+          style: 'flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis',
+          text: m.opp || '(상대 미입력)'
+        }),
+        h('b', { style: 'flex:0 0 auto;color:' + col, text: m.score }),
+        h('span', { class: 'tiny muted', style: 'flex:0 0 auto;min-width:72px;text-align:right',
+          text: m.xg === null ? 'xG —' : 'xG ' + m.xg + (m.xgAgainst === null ? '' : ':' + m.xgAgainst) }),
+        h('button', {
+          class: 'btn sm ghost', style: 'flex:0 0 auto;padding:2px 7px',
+          'aria-label': '이 경기 지우기',
+          onclick: function () {
+            if (!window.confirm('이 경기 기록을 지웁니다. 계속할까요?')) return;
+            /*
+             * 점수가 없는 기록은 matchReview가 걸러 내므로, 화면의 순서와
+             * S.matches의 순서가 어긋납니다. 반드시 id로 찾아 지웁니다.
+             */
+            var at = -1;
+            (S.matches || []).forEach(function (x, j) { if (x && x.id === m.id) at = j; });
+            if (at < 0) { toast('이미 지워진 경기입니다.'); render(); return; }
+            S.matches.splice(at, 1); save(); render();
+          }
+        }, ['×'])
+      ]));
+    });
+    lc.appendChild(h('div', { class: 'row', style: 'margin-top:10px' }, [
+      h('button', {
+        class: 'btn sm ghost',
+        onclick: function () {
+          if (!window.confirm('저장한 ' + r.n + '경기를 모두 지웁니다. 계속할까요?')) return;
+          S.matches = []; save(); render();
+        }
+      }, ['전부 지우기'])
+    ]));
+    root.appendChild(lc);
   };
 
   var KIND_KO = { hold: '그대로', axis: '지시', toggle: '지시', shape: '형태', sub: '교체' };
@@ -3765,6 +3991,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
                   if (d.standing) S.standing = d.standing;
                   if (d.pinnedFormation !== undefined) S.pinnedFormation = d.pinnedFormation;
                   if (d.tactics) S.tactics = d.tactics;
+                  if (Array.isArray(d.matches)) S.matches = d.matches;
                   if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
                   if (d.match) Object.assign(S.match, d.match);
                   S._baseCache = null; S._needsCache = null; S._trainCache = null;
@@ -3803,7 +4030,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     return {
       v: 2, players: players, opponent: S.opponent, context: S.context,
       standing: S.standing, pinnedFormation: S.pinnedFormation,
-      opponentSquad: S.opponentSquad, match: S.match, tactics: S.tactics
+      opponentSquad: S.opponentSquad, match: S.match, tactics: S.tactics, matches: S.matches
     };
   }
 
@@ -3815,6 +4042,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (d.standing) S.standing = d.standing;
     if (d.pinnedFormation !== undefined) S.pinnedFormation = d.pinnedFormation;
     if (d.tactics) S.tactics = d.tactics;
+    if (Array.isArray(d.matches)) S.matches = d.matches;
     if (d.opponentSquad) S.opponentSquad = d.opponentSquad;
     if (d.match) Object.assign(S.match, d.match);
     S._baseCache = null; S._needsCache = null; S._trainCache = null;
@@ -3963,7 +4191,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       version: 2,
       players: S.players, opponent: S.opponent, context: S.context,
       standing: S.standing, pinnedFormation: S.pinnedFormation,
-      opponentSquad: S.opponentSquad, match: S.match
+      opponentSquad: S.opponentSquad, match: S.match,
+      tactics: S.tactics, matches: S.matches
     }, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

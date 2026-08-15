@@ -1908,6 +1908,312 @@
   }
 
   /*
+   * ── 경기 후 검토 ────────────────────────────────────────────────────────
+   *
+   * 「경기 중」 탭은 기대 득점이 쌓이는데 골이 없으면 "전술을 바꾸지 마세요"라고
+   * 말합니다. 한 경기에서는 그게 맞습니다 — 그런데 그 말이 옳았는지 확인할 방법이
+   * 없었습니다. 기록을 안 남겼으니까요.
+   *
+   * 세 경기째 같은 일이 반복되면 그건 운이 아니라 스쿼드 문제입니다. 그 둘을
+   * 가르려면 표본이 필요하고, 여기서 그 계산을 합니다.
+   *
+   * 쓰는 통계는 하나뿐입니다 — 실제 득점과 기대 득점의 차이를 표본 크기로 나눈 값.
+   * 한 경기의 (득점 − xG)는 표준편차가 대략 1골이므로, N경기 누적 차이를 √N으로
+   * 나누면 "이 정도 차이가 운으로 나올 만한가"를 잴 수 있습니다. 이 도구는
+   * 1.5를 넘으면 운으로 설명하지 않습니다.
+   *
+   * 이 값은 축구 통계의 표준이 아니라 이 도구의 기준입니다. 그래서 화면에
+   * 계산 근거를 같이 적습니다 — 숫자만 던지면 믿을 근거가 없습니다.
+   */
+  var FINISH_SIGMA = 1.0;      // 한 경기 (득점 − xG)의 대략적인 표준편차
+  var FINISH_Z = 1.5;          // 이 이상 벌어지면 운으로 보지 않습니다
+  var FINISH_Z_SOFT = 1.0;     // 이 이상이면 "의심스럽다"까지만 말합니다
+  var MIN_MATCHES = 4;         // 이보다 적으면 마무리 판정을 아예 하지 않습니다
+  var SHOT_QUALITY_LOW = 0.08; // 슈팅당 기대 득점 — 경기 중 규칙과 같은 기준
+  var SHOT_QUALITY_GOOD = 0.12;
+  var TAG_REPEAT = 0.4;        // 경기의 이 비율 이상에서 나오면 '반복'으로 봅니다
+
+  function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
+  function sum(list) { return list.reduce(function (a, b) { return a + b; }, 0); }
+  // 화면의 기준값은 −1.5처럼 유니코드 빼기를 씁니다. 계산 결과만 -4.08로 나오면
+  // 같은 문장 안에서 두 종류의 빼기 기호가 섞여 읽기 나쁩니다.
+  function signed(v) { return v < 0 ? '−' + Math.abs(v) : String(v); }
+
+  function matchReview(matches) {
+    var list = (matches || []).filter(function (m) {
+      return m && num(m.gf) !== null && num(m.ga) !== null;
+    });
+    if (!list.length) return null;
+
+    var findings = [];
+    var n = list.length;
+
+    // ── 성적 ──
+    var w = 0, d = 0, l = 0, gf = 0, ga = 0;
+    list.forEach(function (m) {
+      gf += m.gf; ga += m.ga;
+      if (m.gf > m.ga) w++; else if (m.gf === m.ga) d++; else l++;
+    });
+    var record = {
+      n: n, w: w, d: d, l: l, gf: gf, ga: ga,
+      pts: w * 3 + d, ppg: Math.round((w * 3 + d) / n * 100) / 100
+    };
+
+    /*
+     * 통계마다 표본이 다릅니다.
+     *
+     * 기록은 손으로 저장하므로 어떤 경기는 기대 득점만, 어떤 경기는 점유율만
+     * 있습니다. 그런데 처음에는 상대 기대 득점을 '우리 기대 득점이 있는 경기'
+     * 안에서만 찾았고, 슈팅당 기대 득점을 다른 표본에서 구해 놓고 화면에는
+     * 전체 표본인 것처럼 적었습니다. 서로 다른 경기 묶음에서 나온 숫자를 한
+     * 문장에 넣으면 그 문장은 어떤 경기에 대해서도 참이 아닙니다.
+     *
+     * 그래서 묶음을 먼저 각각 만들고, 문장마다 그 묶음의 크기를 같이 말합니다.
+     */
+    var has = function (side, key) {
+      return function (m) { return num(m[side] && m[side][key]) !== null; };
+    };
+    var mXg = list.filter(has('us', 'xg'));
+    var mXga = list.filter(has('them', 'xg'));          // 우리 기록과 독립입니다
+    var mShots = list.filter(function (m) { return has('us', 'xg')(m) && has('us', 'shots')(m); });
+    var mPoss = list.filter(has('us', 'possession'));
+    var mSot = list.filter(has('us', 'sot'));
+    // 내려앉은 상대 판정은 두 값이 같은 경기에 다 있어야 성립합니다.
+    var mParked = list.filter(function (m) { return has('us', 'possession')(m) && has('us', 'sot')(m); });
+
+    var stats = {
+      xgFor: null, xgAgainst: null, shots: null, sot: null, possession: null,
+      perShot: null, z: null, zAgainst: null,
+      sample: mXg.length, sampleAgainst: mXga.length,
+      sampleShots: mShots.length, samplePoss: mPoss.length,
+      sampleSot: mSot.length, sampleParked: mParked.length
+    };
+
+    /*
+     * 반올림한 값으로 다시 계산하지 않습니다.
+     * 화면에 13.0으로 보이는 값이 실제로는 12.96일 수 있는데, 그걸로 z를 구하면
+     * 경계에서 판정이 뒤집힙니다.
+     */
+    var xgForRaw = null, xgAgainstRaw = null, shotXgRaw = null;
+    if (mXg.length) {
+      xgForRaw = sum(mXg.map(function (m) { return m.us.xg; }));
+      stats.xgFor = Math.round(xgForRaw * 10) / 10;
+      stats.goalsFor = sum(mXg.map(function (m) { return m.gf; }));
+      stats.z = Math.round((stats.goalsFor - xgForRaw) / (FINISH_SIGMA * Math.sqrt(mXg.length)) * 100) / 100;
+      stats.shortBy = Math.round((xgForRaw - stats.goalsFor) * 10) / 10;
+    }
+    if (mXga.length) {
+      xgAgainstRaw = sum(mXga.map(function (m) { return m.them.xg; }));
+      stats.xgAgainst = Math.round(xgAgainstRaw * 10) / 10;
+      stats.goalsAgainst = sum(mXga.map(function (m) { return m.ga; }));
+      stats.zAgainst = Math.round((stats.goalsAgainst - xgAgainstRaw) / (FINISH_SIGMA * Math.sqrt(mXga.length)) * 100) / 100;
+      // 화면에 보일 값만 반올림합니다. 판정은 아래에서 원값으로 합니다 —
+      // 1.499를 1.5로 올린 뒤 '1.5 이상'을 재면 경계에서 뒤집힙니다.
+      stats.xgaPerRaw = xgAgainstRaw / mXga.length;
+      stats.xgaPer = Math.round(stats.xgaPerRaw * 100) / 100;
+    }
+    if (mShots.length) {
+      var shotTotal = sum(mShots.map(function (m) { return m.us.shots; }));
+      shotXgRaw = sum(mShots.map(function (m) { return m.us.xg; }));
+      stats.shots = shotTotal;
+      stats.shotXg = Math.round(shotXgRaw * 10) / 10;
+      stats.perShot = shotTotal > 0 ? Math.round(shotXgRaw / shotTotal * 1000) / 1000 : null;
+    }
+    if (mPoss.length) {
+      stats.possession = Math.round(sum(mPoss.map(function (m) { return m.us.possession; })) / mPoss.length);
+    }
+    if (mSot.length) {
+      stats.sot = Math.round(sum(mSot.map(function (m) { return m.us.sot; })) / mSot.length * 10) / 10;
+    }
+
+    /*
+     * ── 마무리 ──
+     *
+     * 여기가 이 화면의 핵심입니다. "결정력 부족"은 한 경기로는 절대 알 수 없고,
+     * 표본이 모자라면 모자라다고 말해야 합니다 — 세 경기로 스트라이커를 파는 것이
+     * 가장 비싼 실수입니다.
+     */
+    var sampleKo = mXg.length + '경기';
+    if (!mXg.length) {
+      findings.push({
+        kind: 'no-xg', level: 'note',
+        text: '기대 득점을 넣은 경기가 없어 마무리를 판정할 수 없습니다.',
+        fix: '「경기 중」 탭에서 기록을 넣고 저장하면 여기서 누적으로 봅니다. 슈팅 · 유효 슈팅 · 기대 득점 · 점유율 네 개만 있어도 됩니다.'
+      });
+    } else if (mXg.length < MIN_MATCHES) {
+      findings.push({
+        kind: 'small-sample', level: 'note',
+        text: '기대 득점이 있는 경기가 ' + sampleKo + '뿐입니다 — 아직 운과 실력을 가를 수 없습니다.',
+        fix: MIN_MATCHES + '경기는 넘겨야 판정합니다. 지금 스트라이커를 파는 것이 가장 비싼 실수입니다.'
+      });
+    } else if (stats.z <= -FINISH_Z) {
+      findings.push({
+        kind: 'finishing-bad', level: 'high',
+        text: sampleKo + ' 누적 기대 득점 ' + stats.xgFor + '에 실제 ' + stats.goalsFor + '골 — '
+          + stats.shortBy + '골 부족합니다. 운으로 설명되는 범위를 넘었습니다.',
+        fix: '전술이 아니라 마무리하는 선수의 문제입니다. 슛을 가장 많이 쏘는 선수의 마무리 · 침착성 · 퍼스트 터치를 보고, 낮으면 개인 훈련 초점을 그쪽으로 돌리거나 그 자리를 영입 목록에 올리세요.',
+        detail: '기준: (실제 득점 − 기대 득점) ÷ √경기수 = ' + signed(stats.z) + '. −' + FINISH_Z + ' 아래면 운으로 보지 않습니다.'
+      });
+    } else if (stats.z <= -FINISH_Z_SOFT) {
+      findings.push({
+        kind: 'finishing-soft', level: 'note',
+        text: sampleKo + ' 누적 기대 득점 ' + stats.xgFor + '에 실제 ' + stats.goalsFor + '골 — 조금 밑돕니다.',
+        fix: '아직 운의 범위 안입니다. 몇 경기 더 보고 판단하세요.',
+        detail: '기준: (실제 득점 − 기대 득점) ÷ √경기수 = ' + signed(stats.z) + '.'
+      });
+    } else if (stats.z >= FINISH_Z) {
+      findings.push({
+        kind: 'finishing-hot', level: 'note',
+        text: sampleKo + ' 누적 기대 득점 ' + stats.xgFor + '에 실제 ' + stats.goalsFor + '골 — 기대치를 크게 넘고 있습니다.',
+        fix: '지금 성적은 만드는 기회보다 좋습니다. 이 차이는 대개 되돌아오므로, 성적만 보고 전술을 그대로 두면 나중에 갑자기 안 들어갑니다. 기회의 양 자체를 늘려 두세요.',
+        detail: '기준: (실제 득점 − 기대 득점) ÷ √경기수 = ' + signed(stats.z) + '.'
+      });
+    } else {
+      findings.push({
+        kind: 'finishing-ok', level: 'good',
+        text: sampleKo + ' 누적 기대 득점 ' + stats.xgFor + '에 실제 ' + stats.goalsFor + '골 — 만드는 만큼 넣고 있습니다.',
+        fix: '', detail: '기준: (실제 득점 − 기대 득점) ÷ √경기수 = ' + signed(stats.z) + '.'
+      });
+    }
+
+    /*
+     * ── 기회의 질 ──
+     * 같은 기대 득점 2.0이라도 슈팅 10개로 만든 것과 25개로 만든 것은 다른 경기입니다.
+     * 이 숫자는 슈팅 기록이 있는 경기에서만 나오므로, 그 경기 수를 같이 말합니다.
+     */
+    if (stats.perShot !== null && mShots.length >= 3) {
+      var shotsKo = (mShots.length === mXg.length ? '' : '슈팅 기록이 있는 ' + mShots.length + '경기에서 ');
+      if (stats.perShot <= SHOT_QUALITY_LOW) {
+        findings.push({
+          kind: 'far-shots', level: 'high',
+          text: shotsKo + '슈팅 ' + stats.shots + '개에 기대 득점 ' + stats.shotXg
+            + ' — 슈팅당 ' + stats.perShot + '입니다. 먼 거리에서만 쏘고 있습니다.',
+          fix: '슈팅 수가 아니라 슈팅 위치가 문제입니다. 「적극적으로 슛」을 끄고 「박스 안까지 볼 배급」을 켜세요. 중거리 슛이 높은 선수의 개인 지시에서 「더 자주 슛」도 빼야 합니다.'
+        });
+      } else if (stats.perShot >= SHOT_QUALITY_GOOD) {
+        findings.push({
+          kind: 'good-shots', level: 'good',
+          text: shotsKo + '슈팅당 기대 득점이 ' + stats.perShot + '입니다 — 좋은 자리에서 쏘고 있습니다.',
+          fix: ''
+        });
+      }
+    }
+
+    /*
+     * ── 수비 ──
+     *
+     * 둘은 정반대의 처방입니다 — 실점이 기대 실점을 넘는 것은 골키퍼,
+     * 기대 실점 자체가 높은 것은 형태. 그런데 둘 다 참일 수도 있어서, 처음에는
+     * "형태를 고쳐도 소용없다"와 "형태로 고쳐라"가 나란히 떴습니다. 서로 부정하는
+     * 조언 두 개는 조언이 아니므로, 둘 다 걸리면 무엇을 먼저 할지까지 말합니다.
+     */
+    var keeperBad = stats.zAgainst !== null && mXga.length >= MIN_MATCHES && stats.zAgainst >= FINISH_Z;
+    var shapeBad = num(stats.xgaPerRaw) !== null
+      && mXga.length >= MIN_MATCHES && stats.xgaPerRaw >= 1.5;
+    var xgaKo = mXga.length + '경기';
+    if (shapeBad) {
+      findings.push({
+        kind: 'defence-shape', level: 'high',
+        text: xgaKo + ' 기준 경기당 기대 실점이 ' + stats.xgaPer + '입니다 — 내주는 기회 자체가 많습니다.',
+        fix: '이건 전술로 고칩니다. 수비 라인과 압박 강도가 스쿼드 속도에 맞는지, 수비형 미드필더가 뒤를 가리고 있는지부터 보세요.'
+      });
+    }
+    if (keeperBad) {
+      findings.push({
+        kind: 'keeper', level: 'high',
+        text: xgaKo + ' 기준 기대 실점 ' + stats.xgAgainst + '에 실제 ' + stats.goalsAgainst
+          + '실점 — 내주는 기회에 비해 너무 많이 먹고 있습니다.',
+        fix: shapeBad
+          ? '위의 형태 문제와 별개입니다. 형태를 먼저 고치되, 그것만으로는 이 차이가 안 없어집니다 — 골키퍼의 반사 신경 · 일대일 · 집중력도 같이 보세요.'
+          : '내주는 기회 자체는 많지 않습니다. 수비 형태보다 골키퍼를 먼저 보세요 — 반사 신경 · 일대일 · 집중력이 낮으면 형태를 고쳐도 같은 일이 반복됩니다.',
+        detail: '기준: (실제 실점 − 기대 실점) ÷ √경기수 = ' + signed(stats.zAgainst) + '.'
+      });
+    }
+
+    /*
+     * ── 내려앉은 상대를 반복해서 못 여는가 ──
+     * 점유율과 유효 슈팅이 **같은 경기에** 다 있어야 성립합니다. 서로 다른 경기에서
+     * 뽑은 두 평균을 한 문장에 넣으면 어느 경기에 대해서도 참이 아닌 말이 됩니다.
+     * 기준은 경기 중 규칙(점유율 58%+ / 유효 슈팅 3개 이하)과 같게 둡니다.
+     */
+    if (mParked.length >= 3) {
+      var pAvg = sum(mParked.map(function (m) { return m.us.possession; })) / mParked.length;
+      var sAvg = sum(mParked.map(function (m) { return m.us.sot; })) / mParked.length;
+      if (pAvg >= 58 && sAvg <= 3) {
+        findings.push({
+          kind: 'parked-repeat', level: 'high',
+          text: '점유율과 유효 슈팅이 같이 있는 ' + mParked.length + '경기에서 평균 점유율 '
+            + Math.round(pAvg) + '%인데 경기당 유효 슈팅이 ' + (Math.round(sAvg * 10) / 10)
+            + '개입니다 — 상대가 내려앉으면 반복해서 못 열고 있습니다.',
+          fix: '한 경기의 문제가 아니라 형태의 문제입니다. 내려앉은 블록을 여는 형태(폭을 잡는 측면 자원 + 오버랩 + 박스 안 제공권)를 슬롯 하나로 만들어 두세요.'
+        });
+      }
+    }
+
+    // ── 홈/원정 ──
+    var home = list.filter(function (m) { return m.venue === 'home'; });
+    var away = list.filter(function (m) { return m.venue === 'away'; });
+    function ppgOf(a) {
+      if (!a.length) return null;
+      return sum(a.map(function (m) { return m.gf > m.ga ? 3 : m.gf === m.ga ? 1 : 0; })) / a.length;
+    }
+    var hp = ppgOf(home), ap = ppgOf(away);
+    if (home.length >= MIN_MATCHES && away.length >= MIN_MATCHES && hp !== null && ap !== null && ap - hp >= 1) {
+      findings.push({
+        kind: 'home-worse', level: 'note',
+        text: '홈 ' + home.length + '경기 승점이 경기당 ' + Math.round(hp * 100) / 100
+          + '점, 원정 ' + away.length + '경기가 ' + Math.round(ap * 100) / 100 + '점입니다 — 홈에서 더 못하고 있습니다.',
+        fix: '홈에서는 상대가 내려앉습니다. 원정용 형태 그대로 홈 경기를 치르면 공간이 없어 막힙니다 — 내려앉은 상대용 슬롯이 따로 필요합니다.'
+      });
+    }
+
+    /*
+     * ── 반복되는 장면 ──
+     * 태그는 한 경기에 같은 것을 여러 번 붙일 수 있으므로 경기 단위로 셉니다.
+     * 그리고 마무리와 같은 표본 기준을 씁니다 — 두 경기로 "반복됩니다"라고 하면서
+     * 옆에서는 "아직 판정할 수 없습니다"라고 하면 앞뒤가 안 맞습니다.
+     */
+    var tagCount = {};
+    list.forEach(function (m) {
+      var seen = {};
+      (m.flags || []).forEach(function (id) {
+        if (seen[id]) return;
+        seen[id] = 1;
+        tagCount[id] = (tagCount[id] || 0) + 1;
+      });
+    });
+    if (n >= MIN_MATCHES) {
+      (TD.MATCH_TAGS || []).forEach(function (t) {
+        var c = tagCount[t.id] || 0;
+        if (c < 2 || c / n < TAG_REPEAT) return;
+        findings.push({
+          kind: 'tag-' + t.id, level: 'high',
+          text: n + '경기 중 ' + c + '경기에서 「' + t.ko + '」 — ' + t.repeat,
+          fix: t.fix
+        });
+      });
+    }
+
+    // 경기별 표 — 화면에 그대로 그립니다. id를 같이 냅니다(지울 때 순서로 찾으면 안 됩니다).
+    var perMatch = list.map(function (m) {
+      var xg = num(m.us && m.us.xg);
+      var shots = num(m.us && m.us.shots);
+      return {
+        id: m.id,
+        opp: m.opp || '',
+        venue: m.venue === 'away' ? '원정' : m.venue === 'home' ? '홈' : '—',
+        score: m.gf + ':' + m.ga,
+        result: m.gf > m.ga ? 'w' : m.gf === m.ga ? 'd' : 'l',
+        xg: xg, xgAgainst: num(m.them && m.them.xg), shots: shots,
+        perShot: (xg !== null && shots) ? Math.round(xg / shots * 1000) / 1000 : null,
+        flags: m.flags || []
+      };
+    });
+
+    return { record: record, stats: stats, findings: findings, perMatch: perMatch, tagCount: tagCount };
+  }
+
+  /*
    * ── 뎁스와 로테이션 ─────────────────────────────────────────────────────
    *
    * 지금까지 선수는 주전 아니면 나머지, 둘뿐이었습니다. 그런데 적합도 71과 70은
@@ -3552,6 +3858,7 @@
     slotAudit: slotAudit,
     squadTiers: squadTiers,
     rotationPlan: rotationPlan,
+    matchReview: matchReview,
     condBand: condBand,
     TIRED_AT: TIRED_AT,
     NEW_TACTIC_GAP: NEW_TACTIC_GAP,

@@ -408,6 +408,63 @@ for (const ph of TD.MATCH_PHASES) {
   }
 }
 
+/*
+ * ── 경기 후 검토 ─────────────────────────────────────────────────────────
+ *
+ * 기록은 사람이 손으로 저장하므로 반쯤 빈 것이 섞입니다 — 점수만 있고 통계가
+ * 없는 경기, 기대 실점만 없는 경기, 태그만 잔뜩 붙은 경기. 어느 조합에서도
+ * 지어내거나 터지면 안 됩니다.
+ */
+for (let round = 0; round < 300; round++) {
+  const n = int(0, 14);
+  const games = [];
+  for (let i = 0; i < n; i++) {
+    const hasStats = rnd() < 0.75;
+    const hasXga = hasStats && rnd() < 0.7;
+    games.push({
+      id: 'g' + i,
+      opp: rnd() < 0.3 ? '' : '상대' + i,
+      venue: pick(['home', 'away']),
+      gf: int(0, 6), ga: int(0, 6),
+      flags: TD.MATCH_TAGS.filter(() => rnd() < 0.25).map((t) => t.id),
+      us: hasStats ? {
+        xg: rnd() < 0.15 ? null : int(0, 45) / 10,
+        shots: rnd() < 0.15 ? null : int(0, 30),
+        sot: rnd() < 0.2 ? null : int(0, 12),
+        possession: rnd() < 0.2 ? null : int(20, 80)
+      } : null,
+      them: hasXga ? { xg: int(0, 40) / 10 } : null
+    });
+  }
+  // 아예 깨진 기록도 섞습니다 — 저장이 반쯤 실패해도 통계가 오염되면 안 됩니다
+  if (rnd() < 0.2) games.push({ id: 'broken', venue: 'home' });
+  if (rnd() < 0.1) games.push(null);
+
+  const tag = `경기후/${round}`;
+  let rv;
+  try { rv = E.matchReview(games); } catch (e) { fail(tag, 'throw ' + e.message); continue; }
+  runs++;
+  if (!rv) continue;
+  checkStrings(tag, rv.findings);
+  const valid = games.filter((m) => m && typeof m.gf === 'number' && typeof m.ga === 'number');
+  if (rv.record.n !== valid.length) fail(tag, `경기 ${valid.length}개인데 ${rv.record.n}개로 셌다`);
+  if (rv.record.w + rv.record.d + rv.record.l !== rv.record.n) fail(tag, '승무패 합이 경기 수와 다르다');
+  if (rv.perMatch.length !== rv.record.n) fail(tag, '경기별 표의 길이가 다르다');
+  for (const f of rv.findings) {
+    if (!['high', 'note', 'good'].includes(f.level)) fail(tag, `알 수 없는 등급 ${f.level}`);
+  }
+  // 표본이 모자라면 절대 단정하지 않는다 — 이 화면의 존재 이유다
+  const withXg = valid.filter((m) => m.us && typeof m.us.xg === 'number');
+  const said = rv.findings.some((f) => f.kind === 'finishing-bad' || f.kind === 'finishing-hot');
+  if (said && withXg.length < 4) fail(tag, `${withXg.length}경기로 마무리를 단정했다`);
+  // 태그는 반복될 때만 말한다
+  for (const t of TD.MATCH_TAGS) {
+    const c = valid.filter((m) => (m.flags || []).includes(t.id)).length;
+    const told = rv.findings.some((f) => f.kind === 'tag-' + t.id);
+    if (told && (c < 2 || c / rv.record.n < 0.4)) fail(tag, `${t.id}: ${c}/${rv.record.n}인데 반복이라고 했다`);
+  }
+}
+
 if (fails.length) {
   console.error(`\n씨앗 ${SEED} · 검사 ${runs}회 · 문제 ${fails.length}건`);
   fails.forEach((f) => console.error('  ✗ ' + f));

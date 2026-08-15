@@ -684,7 +684,8 @@
   var STAT_LOOKUP = null;
   function statLookup() {
     if (STAT_LOOKUP) return STAT_LOOKUP;
-    STAT_LOOKUP = {};
+    // 프로토타입 이름(constructor, toString …)이 항목으로 잡히지 않게 빈 객체로 만듭니다.
+    STAT_LOOKUP = Object.create(null);
     var TD = root.FM_TACTIC_DATA;
     if (!TD) return STAT_LOOKUP;
     TD.MATCH_STATS.forEach(function (m) {
@@ -716,13 +717,84 @@
       if (left === null && right === null) return;
       rows.push({ id: id, label: cells[1], left: left, right: right });
     });
+    /*
+     * 표가 아니면 줄 단위로 한 번 더 봅니다.
+     *
+     * 위쪽은 FM이 내보낸 표(값 ⇥ 항목 ⇥ 값)만 읽습니다. 그런데 경기가 끝난 뒤
+     * 숫자 네 개만 기억나는 경우가 훨씬 많고, 그때 「슈팅 18 5」라고 쳐 넣으면
+     * 통째로 실패했습니다. 기능이 있는데 못 쓰는 상태였습니다.
+     *
+     * 「슈팅 18 5」 · 「슈팅: 18 - 5」 · 「슈팅 18 대 5」 · 「18 슈팅 5」를 모두 받습니다.
+     */
+    if (!rows.length) {
+      var line = parseStatLines(text, look);
+      rows = line.rows; unknown = unknown.concat(line.unknown);
+    }
+
     var left = {}, right = {};
     rows.forEach(function (r) { left[r.id] = r.left; right[r.id] = r.right; });
     return {
       rows: rows, left: left, right: right, unknown: unknown,
       format: det.format,
-      error: rows.length ? null : '경기 통계 표를 찾지 못했습니다.'
+      error: rows.length ? null : '경기 통계를 읽지 못했습니다.'
     };
+  }
+
+  /*
+   * 손으로 친 줄에서 항목과 숫자를 뽑습니다.
+   *
+   * 숫자를 먼저 걷어내고 남은 글자를 항목 이름으로 봅니다. 이 순서여야
+   * 「기대 득점 2.4 0.6」처럼 항목에 숫자가 아닌 글자만 남는 경우를 안 놓칩니다.
+   */
+  function parseStatLines(text, look) {
+    var rows = [], unknown = [], byId = {};
+    String(text == null ? '' : text).split(/[\n\r]+/).forEach(function (raw) {
+      var s = raw.trim();
+      if (!s) return;
+      var body = s
+        // FM은 「90% (180/199)」처럼 괄호에 내역을 답니다. 숫자로 세면 상대 값이
+        // 괄호 안 숫자로 바뀝니다 — 아예 걷어냅니다.
+        .replace(/[（(][^)）]*[)）]/g, ' ')
+        // 값 사이를 잇는 말. '대'는 홀로 선 것만 — '기대 득점'을 깨면 안 됩니다.
+        .replace(/(^|\s)대(\s|$)/g, ' ')
+        .replace(/\bvs\b/gi, ' ')
+        .replace(/[:：]/g, ' ')
+        // 천 단위 쉼표만 걷어냅니다. 「2,4」는 유럽식 소수점이라 남깁니다.
+        .replace(/(\d),(\d{3})(?!\d)/g, '$1$2')
+        // 「64%-36%」의 하이픈을 빼기 기호로 읽으면 상대 값이 음수가 됩니다.
+        .replace(/([\d%])\s*[-–—~]\s*(\d)/g, '$1 $2');
+
+      var TOKEN = /-?\d+(?:[.,]\d+)?%?/g;
+      var nums = body.match(TOKEN) || [];
+      if (!nums.length) return;
+      // 숫자가 셋 이상이면 어느 것이 우리 값인지 알 수 없습니다. 지어내지 않고 버립니다.
+      if (nums.length > 2) return;
+      var label = body.replace(TOKEN, ' ')
+        .replace(/[\-–—~/|]+/g, ' ')      // 남은 구분 기호가 항목 이름에 붙어 화면에 나갑니다
+        .replace(/\s+/g, ' ').trim();
+      if (!label) return;
+      var key = norm(label);
+      // Object.prototype의 이름(constructor 등)이 항목으로 잡히면 안 됩니다.
+      if (!Object.prototype.hasOwnProperty.call(look, key)) {
+        if (unknown.indexOf(label) < 0) unknown.push(label);
+        return;
+      }
+      var id = look[key];
+      // 천 단위 쉼표는 위에서 걷어냈으므로, 남은 쉼표는 유럽식 소수점입니다.
+      var dec = function (t) { return parseStatValue(String(t).replace(',', '.')); };
+      var left = dec(nums[0]);
+      var right = nums.length > 1 ? dec(nums[1]) : null;
+      if (left === null && right === null) return;
+      // 같은 항목이 여러 줄에 나오면 마지막 줄을 씁니다 — 표를 읽는 쪽과 같은 규칙입니다.
+      if (byId[id]) {
+        byId[id].label = label; byId[id].left = left; byId[id].right = right;
+        return;
+      }
+      var row = { id: id, label: label, left: left, right: right };
+      byId[id] = row;
+      rows.push(row);
+    });
+    return { rows: rows, unknown: unknown };
   }
 
   /*

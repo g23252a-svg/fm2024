@@ -134,13 +134,13 @@ await waitForServer();
 console.log('브라우저 검사');
 
 // ── 1. 모든 탭이 콘솔 오류 없이 그려진다 ──────────────────────────────────
-await test('실제 스쿼드를 넣고 7개 탭을 모두 열어도 오류가 없다', async () => {
+await test('실제 스쿼드를 넣고 8개 탭을 모두 열어도 오류가 없다', async () => {
   const page = await openPage();
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await importSquad(page);
   const st = await stored(page);
   assert.equal(st.players.length, 24, `선수를 ${st.players.length}명 읽었다`);
-  for (const t of ['스쿼드', '기본 전술', '영입', '상대', '맞춤 전술', '경기 중', '안내']) {
+  for (const t of ['스쿼드', '기본 전술', '영입', '상대', '맞춤 전술', '경기 중', '경기 후', '안내']) {
     await tab(page, t);
   }
   assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
@@ -695,13 +695,137 @@ await test('컨디션을 넣으면 로테이션이 나오고, 최적 11은 그�
   await page.close();
 });
 
-// ── 12. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 12. 경기 기록과 경기 후 검토 ──────────────────────────────────────────
+/*
+ * 「경기 중」 탭의 기록 입력은 원래 FM이 내보낸 표만 읽었다 — 경기가 끝난 뒤
+ * 숫자 네 개만 기억나는 경우가 훨씬 많은데 그때는 통째로 실패했다.
+ * 이제 손으로 쳐도 읽히고, 저장하면 「경기 후」 탭이 누적으로 판정한다.
+ */
+await test('손으로 친 기록을 저장하면 경기 후 탭이 누적으로 판정한다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+
+  await tab(page, '경기 중');
+  await page.waitForTimeout(900);
+  // 손으로 친 형식을 그대로 붙여넣는다
+  await page.locator('#tab-match textarea').first()
+    .fill('슈팅 18 5\n유효 슈팅 6 2\n기대 득점 2.4 0.6\n점유율 64 36');
+  await page.locator('#tab-match button', { hasText: '붙여넣은 내용 읽기' }).first().click();
+  await page.waitForTimeout(800);
+  const mt = await page.locator('#tab-match').innerText();
+  assert.ok(!/읽지 못했습니다/.test(mt), `손으로 친 기록을 못 읽었다: ${mt.slice(0, 200)}`);
+  assert.ok(/어느 쪽이 우리 팀/.test(mt), '어느 쪽이 우리 팀인지 안 물었다');
+
+  // 왼쪽이 우리 팀
+  await page.locator('#tab-match .seg button', { hasText: '왼쪽' }).first().click();
+  await page.waitForTimeout(600);
+
+  // 같은 경기를 여섯 번 저장해 표본을 만든다 (0:1 · xG 2.4)
+  const saveCard = page.locator('#tab-match details.card').filter({ hasText: '이 경기 기록으로 저장' }).first();
+  assert.equal(await saveCard.count(), 1, '경기 저장 카드가 없다');
+  await saveCard.locator('summary').first().click();
+  await page.waitForTimeout(400);
+  await saveCard.locator('input[type=text]').first().fill('웨스트햄');
+  await saveCard.locator('.chip', { hasText: '전반 초반 실점' }).first().click();
+  await page.waitForTimeout(300);
+  await page.locator('#tab-match button', { hasText: '저장하고 경기 후로 이동' }).first().click();
+  await page.waitForTimeout(900);
+  assert.ok(/누적 1경기/.test(await page.locator('#tab-review').innerText()), '경기 후 탭으로 안 갔다');
+
+  // 나머지 다섯 경기는 저장본에 직접 넣는다 (화면으로 여섯 번 반복할 이유가 없다)
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    for (let i = 0; i < 5; i++) {
+      d.matches.push({
+        id: 'x' + i, opp: '상대' + i, venue: i % 2 ? 'away' : 'home',
+        gf: 0, ga: 1, flags: i < 2 ? ['early-concede'] : [],
+        us: { xg: 2.2, shots: 17, sot: 6, possession: 62 }, them: { xg: 0.7 }
+      });
+    }
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await tab(page, '경기 후');
+  await page.waitForTimeout(1000);
+
+  const rt = await page.locator('#tab-review').innerText();
+  assert.ok(/누적 6경기/.test(rt), `경기 수가 안 맞는다: ${rt.slice(0, 120)}`);
+  assert.ok(/운으로 설명되는 범위를 넘었습니다/.test(rt),
+    `여섯 경기 xG 13.4에 0골인데 판정을 안 했다: ${rt.slice(0, 500)}`);
+  assert.ok(/√경기수/.test(rt), '계산 근거가 화면에 없다');
+  assert.ok(/전반 초반 실점/.test(rt), '반복되는 장면을 안 짚었다');
+  assert.ok(/웨스트햄/.test(rt), '경기별 목록에 상대가 없다');
+  assert.ok(!/NaN|undefined|\[object/.test(rt), '경기 후 탭에 이상한 값이 있다');
+
+  /*
+   * 점수가 없는 반쪽짜리 기록이 섞이면 화면의 순서와 저장본의 순서가 어긋난다.
+   * 그때 순서로 지우면 엉뚱한 경기가 사라진다 — id로 찾아야 한다.
+   */
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    d.matches = [
+      { id: 'HALF', opp: '반쪽기록', venue: 'home', us: { xg: 1.2 } },   // 점수가 없다
+      { id: 'A', opp: '아스널', venue: 'home', gf: 1, ga: 0 },
+      { id: 'B', opp: '첼시', venue: 'away', gf: 0, ga: 2 }
+    ];
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await tab(page, '경기 후');
+  await page.waitForTimeout(900);
+  const rows = page.locator('#tab-review .card').filter({ hasText: '경기별' }).first().locator('button', { hasText: '×' });
+  assert.equal(await rows.count(), 2, '점수 없는 기록까지 목록에 넣었다');
+  await rows.nth(1).click();          // 첼시 줄
+  await page.waitForTimeout(800);
+  const left = (await stored(page)).matches.map((m) => m.id);
+  assert.deepEqual(left, ['HALF', 'A'], `순서로 지워서 엉뚱한 경기가 사라졌다: ${left.join(',')}`);
+
+  // 배열이 아닌 matches가 들어와도 화면이 죽으면 안 된다
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    d.matches = { a: 1 };             // 손으로 고친 백업
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await tab(page, '경기 후');
+  await page.waitForTimeout(700);
+  await tab(page, '경기 중');
+  await page.waitForTimeout(700);
+  assert.ok(!/undefined경기/.test(await page.locator('#tab-match').innerText()),
+    '배열이 아닌 기록을 그대로 받았다');
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+
+  // 지우면 통계가 따라 줄어야 한다
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    d.matches = [{ id: 'z', opp: '아무', venue: 'home', gf: 1, ga: 0 }];
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await tab(page, '경기 후');
+  await page.waitForTimeout(800);
+  await page.locator('#tab-review button', { hasText: '전부 지우기' }).first().click();
+  await page.waitForTimeout(800);
+  assert.ok(/저장한 경기가 없습니다/.test(await page.locator('#tab-review').innerText()),
+    '전부 지웠는데 비어 있지 않다');
+
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 13. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await importSquad(page);
-  for (const t of ['스쿼드', '기본 전술', '영입', '상대', '맞춤 전술', '경기 중', '안내']) {
+  for (const t of ['스쿼드', '기본 전술', '영입', '상대', '맞춤 전술', '경기 중', '경기 후', '안내']) {
     await tab(page, t);
     const bad = await page.evaluate(() => {
       const out = [];
