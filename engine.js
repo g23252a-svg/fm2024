@@ -1277,8 +1277,8 @@
         push(UNL, -2, sideKo + ' ' + attKo + iga(attKo) + ' 이미 안쪽에 있어 언더랩과 같은 공간을 씁니다.');
       } else if (inverted) {
         // 앞뒤가 모두 안으로 들어옵니다 — 지시로 될 문제가 아니라 조합 문제입니다.
-        push(OVL, -1.5, sideKo + ' ' + attKo + '와 ' + defKo + ' 둘 다 안으로 들어와 오버랩할 사람이 없습니다.');
-        push(UNL, -1.5, sideKo + ' ' + attKo + '와 ' + defKo + ' 둘 다 안쪽 공간을 씁니다.');
+        push(OVL, -1.5, sideKo + ' ' + attKo + wa(attKo) + ' ' + defKo + ' 둘 다 안으로 들어와 오버랩할 사람이 없습니다.');
+        push(UNL, -1.5, sideKo + ' ' + attKo + wa(attKo) + ' ' + defKo + ' 둘 다 안쪽 공간을 씁니다.');
       } else if (holdsWidth && !defGoesWide) {
         push(UNL, -1.5, sideKo + ' ' + defKo + eun(defKo) + ' 역할 자체가 안쪽으로 들어오므로 언더랩 지시가 겹칩니다.');
         push(OVL, -1.5, sideKo + ' ' + attKo + iga(attKo) + ' 측면을 잡고 있어 오버랩할 공간이 없습니다.');
@@ -1323,10 +1323,10 @@
     if (!oppPress) {
       if (deepPm) {
         push('gk_pm', 1.2, deepPm.player
-          ? (deepPm.player.name + iga(deepPm.player.name) + ' ' + deepPm.role.ko + '로 배급을 맡습니다 — 골키퍼가 그쪽으로 주면 전개가 한 단계 빨라집니다.')
+          ? (deepPm.player.name + iga(deepPm.player.name) + ' ' + deepPm.role.ko + ro(deepPm.role.ko) + ' 배급을 맡습니다 — 골키퍼가 그쪽으로 주면 전개가 한 단계 빨라집니다.')
           : '후방 배급을 맡는 역할이 있습니다.');
       } else if (buildCb) {
-        push('gk_cb', 1.2, buildCb.role.ko + '가 있어 센터백에서 전개를 시작할 수 있습니다.');
+        push('gk_cb', 1.2, buildCb.role.ko + iga(buildCb.role.ko) + ' 있어 센터백에서 전개를 시작할 수 있습니다.');
       } else {
         var fb = slotAt('DR', 'DL', 'WBR', 'WBL');
         if (fb && fb.duty !== 'd') {
@@ -1623,7 +1623,7 @@
           return x.slot.pos === (side === 'l' ? 'AML' : 'AMR') || x.slot.pos === (side === 'l' ? 'ML' : 'MR');
         })[0];
         if (ahead && (ahead.role.tags || []).some(function (t) { return t === 'inverted' || t === 'narrow-drift'; }) && l.duty !== 'd') {
-          pi.push({ text: '넓게 벌리기', why: '앞의 ' + ahead.role.ko + '가 안쪽으로 들어오므로 이 선수가 측면 폭을 전담해야 합니다.' });
+          pi.push({ text: '넓게 벌리기', why: '앞의 ' + ahead.role.ko + iga(ahead.role.ko) + ' 안쪽으로 들어오므로 이 선수가 측면 폭을 전담해야 합니다.' });
         }
         if (oppTraits.indexOf('wing-heavy') >= 0 || oppTraits.indexOf('overlapping-fb') >= 0) {
           pi.push({ text: '강하게 밀착 마크', why: '상대 공격이 측면에 몰려 있어 이 자리에서 먼저 붙어야 합니다.' });
@@ -1939,7 +1939,38 @@
   // 같은 문장 안에서 두 종류의 빼기 기호가 섞여 읽기 나쁩니다.
   function signed(v) { return v < 0 ? '−' + Math.abs(v) : String(v); }
 
-  function matchReview(matches) {
+  /*
+   * 선발을 같이 넘기면 이름까지 말합니다.
+   *
+   * "슛을 가장 많이 쏘는 선수의 마무리를 보세요"는 맞는 말이지만, 그걸 보러
+   * 스쿼드 탭으로 갔다가 다시 돌아와야 합니다. 그 값은 이미 다 읽고 있으므로
+   * 여기서 바로 짚습니다 — 선발을 안 넘기면 예전처럼 일반론만 냅니다.
+   */
+  var FRONT_SLOTS = { ST: 1, AMC: 1, AML: 1, AMR: 1 };
+
+  function frontFinishers(xi) {
+    if (!xi || !xi.lineup) return [];
+    return xi.lineup.filter(function (l) {
+      return l.player && FRONT_SLOTS[l.slot.pos];
+    }).map(function (l) {
+      var a = l.player.attrs || {};
+      return {
+        name: l.player.name, pos: posKo(l.slot.pos), role: l.role ? l.role.ko : '',
+        fin: num(a.fin), cmp: num(a.cmp)
+      };
+    }).filter(function (p) { return p.fin !== null; })
+      .sort(function (x, y) { return x.fin - y.fin; });
+  }
+
+  function keeperOf(xi) {
+    if (!xi || !xi.lineup) return null;
+    var gk = xi.lineup.filter(function (l) { return l.slot.pos === 'GK' && l.player; })[0];
+    if (!gk) return null;
+    var a = gk.player.attrs || {};
+    return { name: gk.player.name, ref: num(a.ref), ono: num(a.ono), cnt: num(a.cnt) };
+  }
+
+  function matchReview(matches, xi) {
     var list = (matches || []).filter(function (m) {
       return m && num(m.gf) !== null && num(m.ga) !== null;
     });
@@ -2034,6 +2065,24 @@
      * 가장 비싼 실수입니다.
      */
     var sampleKo = mXg.length + '경기';
+    var front = frontFinishers(xi);
+    /*
+     * 값을 아는 전방 자원이 있으면 가장 낮은 쪽을 이름으로 짚습니다.
+     * 없으면 예전처럼 무엇을 보라고만 말합니다 — 지어내지 않습니다.
+     */
+    function finisherHint() {
+      if (!front.length) {
+        return '슛을 가장 많이 쏘는 선수의 마무리 · 침착성 · 퍼스트 터치를 보고, 낮으면 개인 훈련 초점을 그쪽으로 돌리거나 그 자리를 영입 목록에 올리세요.';
+      }
+      var low = front[0];
+      var others = front.slice(1, 3).map(function (p) {
+        return p.name + ' ' + p.fin + (p.cmp === null ? '' : '/' + p.cmp);
+      });
+      return '지금 선발에서 마무리가 가장 낮은 자리는 ' + low.pos + ' ' + low.name
+        + '(마무리 ' + low.fin + (low.cmp === null ? '' : ' · 침착성 ' + low.cmp) + ')입니다'
+        + (others.length ? ' — 다음은 ' + others.join(', ') : '')
+        + '. 개인 훈련 초점을 마무리로 돌리거나, 「영입」 탭에서 그 자리를 보세요.';
+    }
     if (!mXg.length) {
       findings.push({
         kind: 'no-xg', level: 'note',
@@ -2051,7 +2100,8 @@
         kind: 'finishing-bad', level: 'high',
         text: sampleKo + ' 누적 기대 득점 ' + stats.xgFor + '에 실제 ' + stats.goalsFor + '골 — '
           + stats.shortBy + '골 부족합니다. 운으로 설명되는 범위를 넘었습니다.',
-        fix: '전술이 아니라 마무리하는 선수의 문제입니다. 슛을 가장 많이 쏘는 선수의 마무리 · 침착성 · 퍼스트 터치를 보고, 낮으면 개인 훈련 초점을 그쪽으로 돌리거나 그 자리를 영입 목록에 올리세요.',
+        fix: '전술이 아니라 마무리하는 선수의 문제입니다. ' + finisherHint(),
+        who: front,
         detail: '기준: (실제 득점 − 기대 득점) ÷ √경기수 = ' + signed(stats.z) + '. −' + FINISH_Z + ' 아래면 운으로 보지 않습니다.'
       });
     } else if (stats.z <= -FINISH_Z_SOFT) {
@@ -2107,6 +2157,17 @@
      * "형태를 고쳐도 소용없다"와 "형태로 고쳐라"가 나란히 떴습니다. 서로 부정하는
      * 조언 두 개는 조언이 아니므로, 둘 다 걸리면 무엇을 먼저 할지까지 말합니다.
      */
+    var gkNow = keeperOf(xi);
+    function keeperHint() {
+      if (!gkNow || (gkNow.ref === null && gkNow.ono === null && gkNow.cnt === null)) {
+        return '골키퍼의 반사 신경 · 일대일 · 집중력이 낮으면 형태를 고쳐도 같은 일이 반복됩니다.';
+      }
+      var parts = [];
+      if (gkNow.ref !== null) parts.push('반사 신경 ' + gkNow.ref);
+      if (gkNow.ono !== null) parts.push('일대일 ' + gkNow.ono);
+      if (gkNow.cnt !== null) parts.push('집중력 ' + gkNow.cnt);
+      return '지금 골키퍼는 ' + gkNow.name + '(' + parts.join(' · ') + ')입니다.';
+    }
     var keeperBad = stats.zAgainst !== null && mXga.length >= MIN_MATCHES && stats.zAgainst >= FINISH_Z;
     var shapeBad = num(stats.xgaPerRaw) !== null
       && mXga.length >= MIN_MATCHES && stats.xgaPerRaw >= 1.5;
@@ -2123,9 +2184,11 @@
         kind: 'keeper', level: 'high',
         text: xgaKo + ' 기준 기대 실점 ' + stats.xgAgainst + '에 실제 ' + stats.goalsAgainst
           + '실점 — 내주는 기회에 비해 너무 많이 먹고 있습니다.',
-        fix: shapeBad
-          ? '위의 형태 문제와 별개입니다. 형태를 먼저 고치되, 그것만으로는 이 차이가 안 없어집니다 — 골키퍼의 반사 신경 · 일대일 · 집중력도 같이 보세요.'
-          : '내주는 기회 자체는 많지 않습니다. 수비 형태보다 골키퍼를 먼저 보세요 — 반사 신경 · 일대일 · 집중력이 낮으면 형태를 고쳐도 같은 일이 반복됩니다.',
+        fix: (shapeBad
+          ? '위의 형태 문제와 별개입니다. 형태를 먼저 고치되, 그것만으로는 이 차이가 안 없어집니다.'
+          : '내주는 기회 자체는 많지 않습니다. 수비 형태보다 골키퍼를 먼저 보세요.')
+          + ' ' + keeperHint(),
+        who: gkNow ? [gkNow] : [],
         detail: '기준: (실제 실점 − 기대 실점) ÷ √경기수 = ' + signed(stats.zAgainst) + '.'
       });
     }
@@ -2252,8 +2315,6 @@
    * 따로 봅니다. 같은 선수가 두 자리의 후보로 나오는 것이 맞습니다.
    */
   function squadTiers(input) {
-    var base = input && input.base ? input.base : baseTactic(input || {});
-    if (!base) return null;
     var all = (input.players || []).map(function (p, i) {
       var c = Object.assign({}, p);
       c._id = p.id || ('p' + i);
@@ -2262,6 +2323,24 @@
       return c;
     });
     var pool = splitAvailable(all).available;
+
+    /*
+     * 화면이 이미 계산해 둔 기본 전술을 넘겨받아 두 번 계산하지 않습니다.
+     * 다만 그게 **지금 이 스쿼드로 만든 것인지** 확인해야 합니다 — 캐시가 낡았거나
+     * 다른 목록으로 만든 것이면 이적한 선수가 '주전'으로 남아, 그 자리 뎁스가
+     * 통째로 거짓이 됩니다. 하나라도 어긋나면 조용히 다시 계산합니다.
+     */
+    var base = (input && input.base) || null;
+    if (base) {
+      var inPool = {};
+      pool.forEach(function (p) { inPool[p.name] = 1; });
+      var stale = (base.xi && base.xi.lineup || []).some(function (l) {
+        return l.player && !inPool[l.player.name];
+      });
+      if (stale || !base.xi) base = null;
+    }
+    if (!base) base = baseTactic(input || {});
+    if (!base) return null;
     var cache = {};
     function fitOf(player, role, duty, slotPos) {
       var k = player._id + '|' + role.id + '|' + duty + '|' + slotPos;
@@ -2730,7 +2809,7 @@
         reason = '백업 적합도가 ' + back.fit + '입니다 — 로테이션에 쓰기 어렵습니다.';
       } else if (back.fit < 58) {
         severity = 'mid';
-        reason = '백업 적합도가 ' + back.fit + '이라 주전과 차이가 큽니다.';
+        reason = '백업 적합도가 ' + back.fit + ira(back.fit) + ' 주전과 차이가 큽니다.';
       }
 
       if (naturals.length >= need + 3) {
@@ -2803,7 +2882,7 @@
       team.push('전방 압박을 기본으로 두려면 스태미너·활동량이 받쳐 줘야 합니다(현재 평균 ' + s.stamina + '). 중원과 최전방에 체력형 자원이 필요합니다.');
     }
     if (plan === 'possession' && s.technique > 0 && s.technique < 12) {
-      team.push('점유를 기본으로 두기에는 팀 기술 평균이 ' + s.technique + '로 낮습니다 — 후방과 중원의 패스·퍼스트 터치를 올릴 영입이 먼저입니다.');
+      team.push('점유를 기본으로 두기에는 팀 기술 평균이 ' + s.technique + ro(s.technique) + ' 낮습니다 — 후방과 중원의 패스·퍼스트 터치를 올릴 영입이 먼저입니다.');
     }
     if (s.pace > 0 && s.pace < 12) {
       team.push('앞선 평균 속도가 ' + s.pace + '입니다 — 뒷공간을 노리는 경기 방식 자체가 막혀 있어, 상대가 라인을 올려도 벌줄 방법이 없습니다.');
@@ -3233,9 +3312,10 @@
         fix: ''
       });
     } else if (shapeKeys.length === n && n >= 3) {
+      var splitKo = KO_COUNT[n] || n + '개';
       findings.push({
         kind: 'all-distinct', level: 'high',
-        text: '슬롯 ' + n + '개의 뼈대가 전부 다릅니다(' + slots.map(function (s) { return s.shapeKo; }).join(' / ') + ') — 전술 훈련이 ' + (KO_COUNT[n] || n + '개') + '으로 쪼개져 어느 것도 잘 안 올라갑니다.',
+        text: '슬롯 ' + n + '개의 뼈대가 전부 다릅니다(' + slots.map(function (s) { return s.shapeKo; }).join(' / ') + ') — 전술 훈련이 ' + splitKo + ro(splitKo) + ' 쪼개져 어느 것도 잘 안 올라갑니다.',
         fix: '두 개는 뒷선과 최전방 인원을 맞추세요. 선수들이 서는 자리가 같으면 개인 포지션 친숙도가 그대로 이어져 훨씬 싸게 익습니다.'
       });
     } else if (shapeKeys.length === n) {

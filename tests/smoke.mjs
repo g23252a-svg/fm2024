@@ -2284,6 +2284,54 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(tallSp.weakDefence, null, '제공권이 좋은데 수비 경고가 나왔다');
 }
 
+// ── 조사를 손으로 적지 않는다 ─────────────────────────────────────────────
+/*
+ * 「컴플리트 윙백가 있어」 「백업 적합도가 55이라」 「팀 기술 평균이 13로 낮습니다」.
+ * 전부 실제로 화면에 나가던 문장이다. 값이 무엇이 될지 모르는 자리 뒤에 조사를
+ * 손으로 적으면 값에 따라 틀린다 — 그래서 josa 도우미가 있는데, 새 문장을 쓸
+ * 때마다 잊는다.
+ *
+ * 무작위 검사의 BAD_TEXT는 '은(는)' 꼴만 잡는다. 이건 소스를 직접 훑어서
+ * 「변수 + '조사」 형태 자체를 막는다.
+ */
+{
+  /*
+   * 값이 고정된 문자열이라 조사가 절대 안 바뀌는 자리만 허용한다.
+   * 새로 추가하려면 여기에 근거를 적어야 한다 — 그게 이 검사의 요점이다.
+   */
+  const ALLOWED = [
+    // '왼쪽'/'오른쪽' 둘 다 받침이 있어 '이'로 고정이다.
+    "(M.side === 'left' ? '왼쪽' : '오른쪽') + '이 우리 팀으로 저장됩니다"
+  ];
+  const JOSA = /\+\s*'(이라|라|은|는|이|가|을|를|와|과|으로|로)(?=[\s.,·—…])/g;
+  const files = ['engine.js', 'index.html', 'importer.js',
+                 'data/tactics.js', 'data/setpieces.js', 'data/traits.js', 'data/roles.js'];
+  const hits = [];
+  for (const f of files) {
+    read(f).split('\n').forEach((line, i) => {
+      if (ALLOWED.some((a) => line.includes(a))) return;
+      for (const m of line.matchAll(JOSA)) {
+        hits.push(`${f}:${i + 1} [${m[1]}] ${line.trim().slice(0, 110)}`);
+      }
+    });
+  }
+  assert.deepEqual(hits, [],
+    '변수 뒤에 조사를 손으로 적었다 — josa 도우미(ro/eul/iga/eun/wa/ira)를 쓰라:\n  ' + hits.join('\n  '));
+
+  // 도우미 자체가 맞는지도 못박는다 — 이게 틀리면 위 검사가 통과해도 소용없다
+  const J = E.josa;
+  for (const [fn, word, want] of [
+    ['wa', '윙백', '과'], ['wa', '윙어', '와'],
+    ['ro', '앵커 맨', '으로'], ['ro', '레지스타', '로'], ['ro', 13, '으로'], ['ro', 12, '로'],
+    ['iga', '컴플리트 윙백', '이'], ['iga', '스토퍼', '가'],
+    ['ira', 55, '라'], ['ira', '앵커 맨', '이라'],
+    ['eun', '손흥민', '은'], ['eun', '메짤라', '는'],
+    ['eul', '윙백', '을'], ['eul', '윙어', '를']
+  ]) {
+    assert.equal(J[fn](word), want, `josa.${fn}('${word}')가 ${J[fn](word)}다`);
+  }
+}
+
 // ── 경기 후 검토 ──────────────────────────────────────────────────────────
 /*
  * 한 경기의 결정력 부족은 운이고, 여섯 경기의 결정력 부족은 스쿼드다.
@@ -2557,6 +2605,41 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.ok(!kinds(twoTagged).has('tag-setpiece-concede'),
     '두 경기로 「반복됩니다」라고 했다 — 같은 화면이 아직 판정할 수 없다고 말하는 중이다');
 
+  /*
+   * 선발을 같이 넘기면 "마무리가 문제다"에서 "지금 최전방이 누구고 그 값이
+   * 얼마다"까지 간다. 안 넘기면 예전처럼 일반론만 내야 한다 — 지어내면 안 된다.
+   */
+  const weakFront = squad.map((p) => (
+    (p.positions || []).includes('ST') ? { ...p, attrs: { ...p.attrs, fin: 5, cmp: 5 } } : p));
+  const wfBase = E.baseTactic({ players: weakFront, standing: 'mid' });
+  const named = E.matchReview([
+    g(0, 1, { xg: 2.4 }), g(0, 0, { xg: 2.1 }), g(1, 2, { xg: 2.6 }),
+    g(0, 1, { xg: 1.9 }), g(1, 1, { xg: 2.2 }), g(0, 2, { xg: 2.0 })
+  ], wfBase.xi);
+  const namedBad = named.findings.find((f) => f.kind === 'finishing-bad');
+  assert.ok(namedBad.who && namedBad.who.length, '선발을 넘겼는데 누구인지 안 말했다');
+  assert.ok(/마무리가 가장 낮은 자리는/.test(namedBad.fix), `이름을 안 짚었다: ${namedBad.fix}`);
+  assert.ok(/마무리 5/.test(namedBad.fix), `실제 값을 안 적었다: ${namedBad.fix}`);
+  // 가장 낮은 사람을 짚어야 한다
+  const lowest = namedBad.who[0];
+  assert.ok(namedBad.who.every((x) => x.fin >= lowest.fin), '가장 낮은 순으로 안 세웠다');
+  assert.ok(namedBad.fix.includes(lowest.name), '가장 낮은 선수를 안 짚었다');
+
+  // 선발을 안 넘기면 이름을 지어내지 않는다
+  const unnamed = cold.findings.find((f) => f.kind === 'finishing-bad');
+  assert.ok(!unnamed.who || !unnamed.who.length, '선발도 없이 누구인지 말했다');
+  assert.ok(!/가장 낮은 자리는/.test(unnamed.fix), '선발이 없는데 이름을 지어냈다');
+
+  // 골키퍼 판정도 같다
+  const gkNamed = E.matchReview([
+    g(1, 3, { xga: 0.9 }), g(1, 2, { xga: 0.7 }), g(0, 3, { xga: 1.0 }),
+    g(2, 3, { xga: 0.8 }), g(1, 2, { xga: 0.6 })
+  ], wfBase.xi);
+  const gkFind = gkNamed.findings.find((f) => f.kind === 'keeper');
+  assert.ok(/지금 골키퍼는/.test(gkFind.fix), `골키퍼 이름을 안 짚었다: ${gkFind.fix}`);
+  const gkName = wfBase.xi.lineup.find((l) => l.slot.pos === 'GK').player.name;
+  assert.ok(gkFind.fix.includes(gkName), '엉뚱한 선수를 골키퍼라고 했다');
+
   // 경기별 표
   const pm = cold.perMatch;
   assert.equal(pm.length, 6);
@@ -2571,7 +2654,8 @@ function run(opponent = {}, context = {}, players = squad) {
 
   // 문장 검사
   for (const r of [few, noXg, cold, mixed, fine, hot, farShots, closeShots, keeper, leaky, parked,
-                   repeated, homeFew, homeBad, onlyTheirs, disjoint, someShots, edge, edgeDef, both, dupTags, twoTagged]) {
+                   repeated, homeFew, homeBad, onlyTheirs, disjoint, someShots, edge, edgeDef, both, dupTags,
+                   twoTagged, named, gkNamed]) {
     for (const f of r.findings) {
       assert.ok(f.text && f.text.length > 8, `${f.kind}에 설명이 없다`);
       assert.ok(['high', 'note', 'good'].includes(f.level), `${f.kind}의 알 수 없는 등급 ${f.level}`);

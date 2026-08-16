@@ -441,8 +441,12 @@ for (let round = 0; round < 300; round++) {
   if (rnd() < 0.1) games.push(null);
 
   const tag = `경기후/${round}`;
+  // 선발을 넘길 때와 안 넘길 때 둘 다 흔듭니다 — 이름을 붙이는 경로가 따로입니다.
+  const withXi = round % 2 === 0
+    ? (E.baseTactic({ players: makeSquad(20), standing: 'mid' }) || {}).xi
+    : null;
   let rv;
-  try { rv = E.matchReview(games); } catch (e) { fail(tag, 'throw ' + e.message); continue; }
+  try { rv = E.matchReview(games, withXi); } catch (e) { fail(tag, 'throw ' + e.message); continue; }
   runs++;
   if (!rv) continue;
   checkStrings(tag, rv.findings);

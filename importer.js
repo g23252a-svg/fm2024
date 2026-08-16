@@ -931,7 +931,10 @@
        * 상태 값은 매주 바뀝니다. 빈 열이 이미 넣어 둔 값을 지우면 안 되지만,
        * 값이 들어오면 최신으로 덮습니다 — 지난주 컨디션으로 로테를 짜면 안 됩니다.
        */
-      if (p.cond !== undefined) { cur.cond = p.cond; cur.condition = p.condition; }
+      // 컨디션 열이 '94%'가 아니라 '좋음'처럼 글자일 수 있습니다. 숫자를 못 뽑아도
+      // 원문은 넘겨야 합니다 — 상대 선발 분석이 그 글자를 씁니다.
+      if (p.cond !== undefined) cur.cond = p.cond;
+      if (p.condition !== undefined) cur.condition = p.condition;
       if (p.sharp !== undefined) cur.sharp = p.sharp;
       if (p.mins !== undefined) cur.mins = p.mins;
       if (p.apps !== undefined) cur.apps = p.apps;

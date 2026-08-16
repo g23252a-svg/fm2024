@@ -3498,6 +3498,12 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     function readStats(text) {
       if (!text || !text.trim()) { toast('읽을 내용이 비어 있습니다.'); return; }
       var res = IMP.parseMatchStats(text);
+      /*
+       * 새 기록을 읽으면 좌우 선택을 다시 받아야 합니다. 지난 경기에서 「왼쪽」을
+       * 골랐다고 이번 파일도 왼쪽이 우리 팀이라는 보장이 없는데, 그대로 두면
+       * 저장 전 확인이 지나가 버려 상대 기록이 우리 것으로 쌓입니다.
+       */
+      M.sideChosen = false;
       if (res.error || !res.rows.length) {
         M.stats = { error: res.error || '표를 찾지 못했습니다.', format: res.format };
       } else {
@@ -3705,7 +3711,10 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
            * 넣기 전까지는 그게 맞습니다). 그래서 버튼을 한 번 더 누르면 같은
            * 경기가 통계에 두 번 들어가고, 그 순간 누적 판정이 통째로 틀어집니다.
            */
-          var sig = M.gf + ':' + M.ga + '|' + (hasStats ? JSON.stringify(M.stats[M.side]) : '');
+          // 상대 이름까지 넣습니다. 기록 없이 1:0 두 번을 저장하는 것은 정상인데,
+          // 점수만 보면 매번 "같은 경기 아니냐"고 묻게 됩니다.
+          var sig = NM.opp.trim() + '|' + M.gf + ':' + M.ga + '|'
+            + (hasStats ? JSON.stringify(M.stats[M.side]) : '');
           var dup = (S.matches || []).some(function (g) {
             return g && g._sig === sig;
           });
@@ -3747,8 +3756,25 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    * 결정력 부족은 운이고, 여섯 경기의 결정력 부족은 스쿼드입니다.
    */
   RENDER.review = function (root) {
+    /*
+     * 지금 선발을 같이 넘기면 판정이 이름까지 말합니다 — "마무리가 문제다"에서
+     * "지금 최전방이 누구고 그 값이 얼마다"까지. 선수가 없으면 안 넘깁니다.
+     */
+    var xiNow = null;
+    if (S.players.length >= 7) {
+      try {
+        var sigNow = baseSignature();
+        var cached = (S._baseCache && S._baseCache.sig === sigNow) ? S._baseCache.res : null;
+        if (!cached) {
+          cached = E.baseTactic({ players: S.players, standing: S.standing || 'mid' });
+          if (cached) S._baseCache = { sig: sigNow, res: cached };
+        }
+        xiNow = cached ? cached.xi : null;
+      } catch (e) { xiNow = null; }
+    }
+
     var rv = null;
-    try { rv = E.matchReview(S.matches || []); } catch (e) {
+    try { rv = E.matchReview(S.matches || [], xiNow); } catch (e) {
       root.appendChild(h('div', { class: 'card' }, [h('div', { class: 'rep err', text: '오류: ' + (e && e.message) })]));
       return;
     }
@@ -3795,14 +3821,38 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       h('h2', { text: '무엇이 문제인가' }),
       h('div', { class: 'desc', text: '한 경기가 아니라 누적으로 봅니다. 운으로 설명되는 범위 안이면 그렇다고 말합니다 — 표본이 모자랄 때 스트라이커를 파는 것이 가장 비싼 실수입니다.' })
     ]);
+    /*
+     * 판정마다 그걸 고치는 화면이 따로 있습니다. 읽고 나서 어느 탭으로 가야 하는지
+     * 매번 찾게 두면, 결국 판정만 보고 아무것도 안 고칩니다.
+     */
+    var GOTO = {
+      'finishing-bad': ['transfer', '영입 탭에서 이 자리 보기'],
+      'finishing-soft': null,
+      'far-shots': ['result', '맞춤 전술에서 지시 보기'],
+      'keeper': ['transfer', '영입 탭에서 골키퍼 보기'],
+      'defence-shape': ['base', '기본 전술에서 형태 보기'],
+      'parked-repeat': ['base', '전술 슬롯 만들러 가기'],
+      'home-worse': ['base', '전술 슬롯 만들러 가기'],
+      'no-xg': ['match', '경기 중 탭에서 기록 넣기'],
+      'tag-setpiece-concede': ['base', '수비 세트피스 보기'],
+      'tag-counter-concede': ['base', '기본 전술에서 형태 보기'],
+      'tag-opp-parked': ['base', '전술 슬롯 만들러 가기']
+    };
     rv.findings.forEach(function (f) {
+      var go = GOTO[f.kind];
       fc.appendChild(h('div', { class: 'warn' + (f.level === 'high' ? ' high' : ''),
         style: f.level === 'good' ? 'border-color:#2c4a35' : '' }, [
         h('span', { class: 'ic', text: f.level === 'high' ? '!' : f.level === 'good' ? '✓' : '·' }),
         h('span', {}, [
           f.text,
           f.fix ? h('span', { class: 'fixnote', text: '→ ' + f.fix }) : null,
-          f.detail ? h('span', { class: 'fixnote', style: 'color:var(--dim2)', text: f.detail }) : null
+          f.detail ? h('span', { class: 'fixnote', style: 'color:var(--dim2)', text: f.detail }) : null,
+          go ? h('div', { style: 'margin-top:6px' }, [
+            h('button', {
+              class: 'btn sm ghost',
+              onclick: function () { S.tab = go[0]; render(); window.scrollTo(0, 0); }
+            }, [go[1]])
+          ]) : null
         ])
       ]));
     });
