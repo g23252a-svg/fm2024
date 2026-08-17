@@ -873,6 +873,23 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     if (t.noPosition && t.noPosition < t.imported) {
       lines.push(h('div', { class: 'tiny muted', text: '포지션을 못 읽은 선수 ' + t.noPosition + '명 — 직접 지정해야 배치됩니다.' }));
     }
+    /*
+     * 컨디션이 '94%'가 아니라 '괜찮음'으로 들어온 경우. 값은 넣었지만 구간의
+     * 가운데 값이라 정확하지 않습니다 — 그 사실을 여기서 한 번, 컨디션 카드에서
+     * 한 번 적습니다. 넣었다고만 하고 넘어가면 대략값을 정확한 값으로 믿게 됩니다.
+     */
+    if (t.condFromWords) {
+      lines.push(h('div', { class: 'tiny', style: 'color:var(--acc2)' }, [
+        '컨디션 ' + t.condFromWords + '명분을 글자(괜찮음 · 최고 …)로 읽어 ',
+        h('b', { style: 'color:var(--text)', text: '대략값' }), '으로 넣었습니다 — 순서는 맞으니 로테이션은 나옵니다. ',
+        'FM 환경설정 → 인터페이스에서 컨디션을 퍼센트로 보이게 바꾸면 정확한 값이 들어옵니다.'
+      ]));
+    }
+    // 못 알아본 표기는 조용히 버리지 않습니다 — 버리면 같은 일이 그대로 반복됩니다.
+    if (t.unknownCond && t.unknownCond.length) {
+      lines.push(h('div', { class: 'tiny', style: 'color:var(--warn)',
+        text: '컨디션 표기 ' + t.unknownCond.slice(0, 6).join(' · ') + '은(는) 못 알아봤습니다 — 그 선수는 컨디션이 비어 있습니다.' }));
+    }
     if (t.unknown.length) {
       lines.push(h('div', { class: 'tiny muted', text: '무시한 열: ' +
         t.unknown.slice(0, 12).map(function (c) { return c.header + (c.numeric ? '(능력치?)' : ''); }).join(', ') +
@@ -956,9 +973,10 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
       var files = [], totals = {
         added: 0, updated: 0, filled: 0, readFiles: 0,
-        attrColumns: 0, imported: 0, noPosition: 0, unknown: []
+        attrColumns: 0, imported: 0, noPosition: 0, unknown: [],
+        condFromWords: 0, unknownCond: []
       };
-      var seenUnknown = {};
+      var seenUnknown = {}, seenUnknownCond = {};
       var biggest = null;
       items.forEach(function (it) {
         var res = IMP.parseSquad(it.text);
@@ -998,6 +1016,12 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
           if (seenUnknown[c.header]) return;
           seenUnknown[c.header] = 1;
           totals.unknown.push(c);
+        });
+        totals.condFromWords += (r.condFromWords || 0);
+        (r.unknownCondition || []).forEach(function (w) {
+          if (seenUnknownCond[w]) return;
+          seenUnknownCond[w] = 1;
+          totals.unknownCond.push(w);
         });
       });
       // 포지션은 합친 결과로 다시 셉니다 — 파일마다 따로 세면 한 파일에만 있어도
@@ -1343,11 +1367,13 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   function bulkFitnessCard() {
     if (S.players.length < 3) return null;
     var known = S.players.filter(function (p) { return typeof p.cond === 'number'; }).length;
+    var fromWords = S.players.filter(function (p) { return p.condWord; }).length;
 
     var card = rememberOpen('bulkFit', h('details', { class: 'card' }));
     card.appendChild(h('summary', { style: 'cursor:pointer' }, [
       h('span', { style: 'font-size:15px;font-weight:800', text: '컨디션 한 번에 넣기' }),
-      h('span', { class: 'tiny muted', text: '  ' + known + '/' + S.players.length + '명 입력됨' })
+      h('span', { class: 'tiny muted', text: '  ' + known + '/' + S.players.length + '명 입력됨' }),
+      fromWords ? h('span', { class: 'tiny', style: 'font-weight:800;color:var(--acc2)', text: '  ' + fromWords + '명 대략값' }) : null
     ]));
     card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px' }, [
       '로테이션 제안에 쓰는 값입니다. ',
@@ -1357,13 +1383,36 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       ' — 파일을 넣을 때마다 주전이 바뀌면 포메이션까지 흔들려 전술 친숙도가 무너집니다.'
     ]));
 
+    /*
+     * 글자로 들어온 컨디션. 값이 있으니 로테이션은 나오지만 정확한 %는 아닙니다.
+     * 그 사실과 함께 **정확하게 만드는 방법**을 같이 적습니다 — 한계만 적어 두고
+     * 고치는 법을 안 적으면 매주 대략값으로 살게 됩니다.
+     */
+    if (fromWords) {
+      card.appendChild(h('div', { class: 'rep', style: 'margin:2px 0 8px' }, [
+        h('div', {}, [
+          h('b', { text: fromWords + '명은 글자에서 읽은 대략값입니다.' }),
+          ' FM이 컨디션을 「괜찮음」처럼 글자로 내보내면 정확한 %를 알 수 없어 그 구간의 가운데 값을 씁니다. ',
+          '누가 더 지쳤는지는 맞으므로 로테이션 판단은 그대로 쓸 수 있습니다.'
+        ]),
+        h('div', { class: 'small', style: 'margin-top:6px;color:var(--dim)' }, [
+          '정확한 값을 넣으려면 ',
+          h('b', { style: 'color:var(--text)', text: 'FM 환경설정 → 인터페이스 → 컨디션을 퍼센트로 표시' }),
+          '를 켜고 다시 내보내세요. 아래에서 직접 고쳐도 됩니다.'
+        ])
+      ]));
+    }
+
     var grid = h('div', { class: 'statrows', style: 'margin-top:4px' });
     S.players.forEach(function (p) {
       var band = null;
       try { band = E.condBand(p.cond); } catch (e) { band = null; }
       var bandEl = h('span', { class: 'tiny muted', style: 'min-width:38px', text: band ? band.ko : '' });
+      // 값이 어디서 왔는지 그 줄에 적습니다 — 뭉뚱그려 알리면 어느 줄이 대략값인지 모릅니다.
+      var wordEl = h('span', { class: 'tiny', style: 'color:var(--acc2);font-weight:700',
+        text: p.condWord ? '  ' + p.condWord : '' });
       grid.appendChild(h('div', { class: 'statrow', style: 'gap:8px' }, [
-        h('b', { class: 'us', style: 'text-align:left', text: p.name }),
+        h('b', { class: 'us', style: 'text-align:left' }, [p.name, wordEl]),
         h('input', {
           type: 'number', min: '0', max: '100', inputmode: 'numeric',
           style: 'width:74px;text-align:center',
@@ -1382,6 +1431,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
             // 빈칸은 0이 아니라 '모름'입니다. 0으로 저장하면 전원 지친 것이 됩니다.
             if (e.target.value === '' || !isFinite(v)) delete p.cond;
             else p.cond = Math.max(0, Math.min(100, v));
+            // 사람이 직접 치면 더 이상 글자에서 온 대략값이 아닙니다.
+            delete p.condWord;
+            wordEl.textContent = '';
             save();
             var b = null;
             try { b = E.condBand(p.cond); } catch (err) { b = null; }
@@ -1397,7 +1449,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
         class: 'btn sm ghost',
         onclick: function () {
           if (!window.confirm('입력한 컨디션 ' + known + '건을 모두 지웁니다. 계속할까요?')) return;
-          S.players.forEach(function (p) { delete p.cond; });
+          S.players.forEach(function (p) { delete p.cond; delete p.condWord; });
           save(); render();
         }
       }, ['모두 지우기'])
@@ -3582,6 +3634,15 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       return x.ko + ' ' + (t.counts[x.id] || 0);
     }).join(' · ');
     card.appendChild(h('div', { class: 'tiny muted', style: 'margin-bottom:7px', text: counts }));
+
+    /*
+     * 컨디션이 글자에서 온 대략값이면 여기서도 말합니다. 교체 제안은 컨디션
+     * 문턱(85)을 넘느냐로 갈리는데, 대략값은 그 문턱 근처에서 흔들릴 수 있습니다.
+     */
+    if (S.players.some(function (p) { return p.condWord; })) {
+      card.appendChild(h('div', { class: 'tiny', style: 'margin-bottom:7px;color:var(--acc2)',
+        text: '컨디션 일부가 글자에서 읽은 대략값입니다 — 누가 더 지쳤는지는 맞지만, 문턱에 걸친 선수는 실제와 다를 수 있습니다.' }));
+    }
 
     /*
      * statrow 격자는 좌우 두 팀 숫자를 견주려고 만든 것이라 이름이 두 줄로

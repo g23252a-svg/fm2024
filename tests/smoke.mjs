@@ -3290,5 +3290,90 @@ function run(opponent = {}, context = {}, players = squad) {
   }
 }
 
+// ── 컨디션이 글자로 와도 읽는다 ───────────────────────────────────────────
+/*
+ * FM은 환경설정에 따라 컨디션을 '94%'로도 '괜찮음'으로도 내보낸다. 글자로
+ * 오면 숫자를 못 뽑아 조용히 버렸고, 사용자는 「컨디션 열을 넣어 내보냈는데
+ * 아무것도 안 뜬다」를 만났다. 파일은 멀쩡히 읽혔으니 원인을 알 방법도 없었다.
+ *
+ * 값을 채우는 것만으로는 부족하다. 글자는 구간이라 정확한 %가 아니므로,
+ * **대략값이라는 표시가 같이 와야** 화면이 그렇게 적을 수 있다.
+ */
+{
+  // 순서가 뒤집히면 방전된 선수를 멀쩡한 선수로 읽는다 — 여기가 제일 중요하다
+  let prevPct = 101;
+  for (const band of IMP.CONDITION_WORDS) {
+    assert.ok(band.pct < prevPct, `컨디션 글자 구간이 내림차순이 아니다: ${band.words[0]}`);
+    assert.ok(band.pct >= 0 && band.pct <= 100, `컨디션 글자 구간이 범위를 벗어났다: ${band.words[0]}`);
+    assert.ok(band.words.length, `컨디션 구간 ${band.pct}에 표기가 없다`);
+    prevPct = band.pct;
+  }
+  assert.ok(IMP.conditionFromWord('아주 나쁨') < IMP.conditionFromWord('나쁨'),
+    "'아주 나쁨'을 '나쁨'으로 읽고 있다");
+  /*
+   * 부분 일치를 쓰면 안 된다. 모르는 표기 안에 아는 글자가 들어 있으면 그 값으로
+   * 읽어 버리는데, 하필 그런 조합이 '나쁨'을 품은 더 나쁜 구간이면 방전된 선수를
+   * 멀쩡한 선수로 읽는다. 모르면 모른다고 하고 화면에 띄우는 쪽을 택한다 —
+   * 그래야 표기를 추가할 수 있다.
+   */
+  assert.equal(IMP.conditionFromWord('완전 나쁨'), null, '모르는 표기를 부분 일치로 지어냈다');
+  assert.equal(IMP.conditionFromWord('좋음 (회복 중)'), null, '모르는 표기를 부분 일치로 지어냈다');
+  assert.ok(IMP.conditionFromWord('최고') > IMP.conditionFromWord('괜찮음'), '컨디션 글자 순서가 뒤집혔다');
+  // 공백·대소문자가 흔들려도 같은 값
+  assert.equal(IMP.conditionFromWord('아주좋음'), IMP.conditionFromWord('아주 좋음'));
+  assert.equal(IMP.conditionFromWord('Very Good'), IMP.conditionFromWord('very good'));
+  // 모르는 표기는 지어내지 않는다. 프로토타입 오염도 없어야 한다.
+  assert.equal(IMP.conditionFromWord('말이 안 되는 표기'), null);
+  assert.equal(IMP.conditionFromWord('constructor'), null, '프로토타입에 걸린다');
+  assert.equal(IMP.conditionFromWord(''), null);
+  // %가 오면 %가 이긴다 — 정확한 값을 대략값으로 덮으면 안 된다
+  assert.equal(IMP.parsePercent('94%'), 94);
+
+  const row = (name, pos, cond, status) =>
+    `<tr><td>${status || ''}</td><td>${name}</td><td>${pos}</td><td>${cond}</td></tr>`;
+  const table = (rows) => `<html><body><table>
+    <tr><th>상태</th><th>이름</th><th>포지션</th><th>컨디션</th></tr>${rows.join('')}</table></body></html>`;
+
+  const res = IMP.parseSquad(table([
+    row('지친 선수', 'M (C)', '아주 나쁨'),
+    row('쌩쌩한 선수', 'M (C)', '최고'),
+    row('보통 선수', 'D (C)', '괜찮음'),
+    row('부상 선수', 'D (C)', '좋음', '부상'),
+    row('관심 선수', 'D (C)', '좋음', '관심'),
+    row('모를 선수', 'D (C)', '이상한말')
+  ]));
+  const byCond = Object.fromEntries(res.players.map((p) => [p.name, p]));
+  assert.equal(res.players.length, 6, '글자 컨디션 표를 못 읽었다');
+
+  // 값이 실제로 들어왔는가 — 이게 사용자가 겪은 증상이다
+  assert.equal(typeof byCond['보통 선수'].cond, 'number', "'괜찮음'을 못 읽었다");
+  assert.ok(byCond['지친 선수'].cond < byCond['보통 선수'].cond, '지친 선수가 더 높게 읽혔다');
+  assert.ok(byCond['쌩쌩한 선수'].cond > byCond['보통 선수'].cond, '쌩쌩한 선수가 더 낮게 읽혔다');
+  // 컨디션 문턱을 실제로 가르는가 (로테이션이 이 값으로 갈린다)
+  assert.ok(byCond['지친 선수'].cond < E.TIRED_AT, '방전된 선수가 지친 것으로도 안 잡힌다');
+  assert.ok(byCond['쌩쌩한 선수'].cond >= E.TIRED_AT, '쌩쌩한 선수가 지친 것으로 잡힌다');
+
+  // 대략값이라는 표시가 원문 그대로 와야 화면이 그렇게 적을 수 있다
+  assert.equal(byCond['보통 선수'].condWord, '괜찮음', '글자에서 왔다는 표시가 없다');
+  assert.equal(res.report.condFromWords, 5, '글자로 읽은 인원 수가 안 맞는다');
+
+  // 못 알아본 표기는 조용히 버리지 않는다 — 버리면 같은 일이 그대로 반복된다
+  assert.equal(byCond['모를 선수'].cond, undefined, '모르는 표기로 값을 지어냈다');
+  assert.equal([...res.report.unknownCondition].join('|'), '이상한말', '못 알아본 표기를 보고하지 않는다');
+
+  // '상태' 칸의 부상은 읽고, 잡음(관심 · BPR · 국대)은 건드리지 않는다
+  assert.equal(byCond['부상 선수'].out, true, "'상태'의 부상을 못 읽었다");
+  assert.ok(!byCond['관심 선수'].out, "'관심'을 부상으로 읽었다");
+
+  // %로 다시 내보내면 대략값 표시가 사라져야 한다
+  const pctRes = IMP.parseSquad(table([row('보통 선수', 'D (C)', '88%')]));
+  assert.equal(pctRes.players[0].cond, 88);
+  assert.equal(pctRes.players[0].condWord, undefined, '%로 왔는데 대략값 표시가 붙었다');
+  const mergedCond = IMP.mergeSquad(res.players, pctRes.players);
+  const mergedP = mergedCond.players.filter((p) => p.name === '보통 선수')[0];
+  assert.equal(mergedP.cond, 88, '새 컨디션이 안 덮였다');
+  assert.equal(mergedP.condWord, undefined, '정확한 값이 들어왔는데 대략값 표시가 남았다');
+}
+
 console.log('✓ 모든 검사 통과');
 console.log(`  역할 ${RD.ROLES.length} · 포메이션 ${FD.FORMATIONS.length} · 규칙 ${TD.RULES.length} · 상대 성향 ${TD.OPP_TRAITS.length}`);

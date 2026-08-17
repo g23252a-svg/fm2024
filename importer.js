@@ -65,9 +65,16 @@
   reg('injury', 'Injury', '부상', '부상 상태', 'Expected Return Date', '예상 복귀일',
     '복귀 예정일', '부상 정보', 'Suspension', '출장 정지');
 
+  /*
+   * '상태'(Inf) 열은 대부분 잡음입니다 — 관심 · 반응 · 국대 · BPR · 유소년.
+   * 그런데 부상과 출장 정지도 같은 칸에 들어옵니다. 통째로 버리면 부상 선수가
+   * 그대로 선발에 뽑히므로, **지금 못 뛴다는 것이 분명한 표기만** 읽습니다.
+   */
+  reg('status', 'Status', '상태', 'Inf', 'Info', '정보');
+
   // 알고는 있지만 쓰지 않는 열. 이걸 등록해 두지 않으면 "무시한 열" 목록에
   // 매번 올라와 사용자가 매핑해야 할 열인지 아닌지 헷갈립니다.
-  reg('skip', 'Status', '상태', 'Inf', 'Info', '정보',
+  reg('skip',
     // 전술에서 배정된 자리이지 선수의 등록 포지션이 아닙니다. 값이 '-'이거나
     // 역할 약어라서 포지션으로 읽으면 등록 포지션을 지워 버립니다.
     'Selected Position', '선택한 포지션', '선발 포지션',
@@ -211,6 +218,64 @@
     if (!isFinite(n)) return null;
     return clamp(Math.round(n), 0, 100);
   }
+
+  /*
+   * ── 컨디션이 숫자가 아니라 글자로 오는 경우 ──────────────────────────────
+   *
+   * FM은 컨디션을 '94%'로도 '괜찮음'으로도 내보냅니다 — 환경설정에서 어느 쪽을
+   * 보고 있느냐에 따라 갈립니다. 지금까지는 글자를 만나면 숫자를 못 뽑아 조용히
+   * 버렸고, 그래서 「컨디션 열을 넣어 내보냈는데 아무것도 안 뜬다」가 됐습니다.
+   * 파일은 멀쩡히 읽혔는데 그 열의 값만 사라진 것이라, 화면만 봐서는 원인을
+   * 알 방법이 없었습니다. 조용히 버리는 것이 문제였습니다.
+   *
+   * 글자는 구간이라 정확한 %를 알 수 없습니다. 구간의 가운데 값을 쓰고
+   * **글자에서 왔다는 표시를 같이 넘깁니다**(p.condWord). 화면이 그걸 그대로
+   * 적습니다. 로테이션이 실제로 묻는 것은 "누가 더 지쳤나"이므로, 순서만
+   * 맞으면 판단은 제대로 나옵니다 — 틀리는 것은 소수점이지 순서가 아닙니다.
+   *
+   * 못 알아본 표기는 버리지 않고 report.unknownCondition에 담습니다.
+   * 조용히 버리면 지금과 똑같은 일이 그대로 반복됩니다.
+   */
+  var CONDITION_WORDS = [
+    { pct: 97, words: ['최고', 'superb'] },
+    { pct: 92, words: ['우수', '훌륭함', 'excellent'] },
+    { pct: 87, words: ['아주 좋음', '매우 좋음', 'very good'] },
+    { pct: 82, words: ['좋음', 'good'] },
+    { pct: 77, words: ['괜찮음', '꽤 좋음', '양호함', 'fairly good', 'decent'] },
+    { pct: 72, words: ['보통', 'okay', 'alright'] },
+    { pct: 66, words: ['나쁨', '피로', 'poor', 'tired'] },
+    { pct: 52, words: ['아주 나쁨', '매우 나쁨', '탈진', 'very poor', 'exhausted'] }
+  ];
+
+  function normWord(s) {
+    return String(s == null ? '' : s).replace(/\s+/g, '').toLowerCase();
+  }
+
+  // Object.create(null)이라야 'constructor' 같은 글자가 프로토타입에 걸리지 않습니다.
+  var COND_WORD_MAP = Object.create(null);
+  CONDITION_WORDS.forEach(function (band) {
+    band.words.forEach(function (w) { COND_WORD_MAP[normWord(w)] = band.pct; });
+  });
+
+  /*
+   * 부분 일치는 쓰지 않습니다 — '아주 나쁨'이 '나쁨'에 걸리면 방전된 선수를
+   * 멀쩡한 선수로 읽습니다. 정확히 아는 표기만 바꾸고 나머지는 모른다고 합니다.
+   */
+  function conditionFromWord(raw) {
+    var k = normWord(raw);
+    if (!k) return null;
+    var v = COND_WORD_MAP[k];
+    return v === undefined ? null : v;
+  }
+
+  /*
+   * '상태' 칸에서 이 표기만 못 뛰는 것으로 봅니다. 임대·방출은 뺐습니다 —
+   * 임대는 나간 것인지 데려온 것인지 이 칸만 봐서는 알 수 없고, 방출 예정
+   * 선수는 계약이 끝날 때까지 뛸 수 있습니다. 모르면 건드리지 않습니다.
+   */
+  var OUT_WORDS = Object.create(null);
+  ['부상', '부상중', '출장정지', '정지', '징계', 'injured', 'injury', 'suspended', 'suspension']
+    .forEach(function (w) { OUT_WORDS[normWord(w)] = 1; });
 
   /*
    * 출전 수·출전 시간. 'Apps (Sub)' 열은 '12 (3)' 꼴이라 앞의 숫자만 씁니다 —
@@ -570,6 +635,8 @@
 
     var players = [];
     var attrCols = 0;
+    // 못 알아본 컨디션 표기 — 조용히 버리지 않고 화면에 그대로 띄웁니다.
+    var unknownCond = Object.create(null);
     Object.keys(head.map).forEach(function (j) { if (head.map[j].indexOf('attr:') === 0) attrCols++; });
 
     for (var i = head.index + 1; i < rows.length; i++) {
@@ -590,8 +657,21 @@
           p.condition = String(raw).trim();
           var pct = parsePercent(raw);
           if (pct !== null) p.cond = pct;
+          else {
+            var cw = conditionFromWord(raw);
+            // 글자에서 온 값이라는 표시를 원문 그대로 달아 둡니다 — 화면이 이걸 적습니다.
+            if (cw !== null) { p.cond = cw; p.condWord = p.condition; }
+            else if (p.condition && p.condition !== '-' && p.condition !== '–') {
+              unknownCond[p.condition] = (unknownCond[p.condition] || 0) + 1;
+            }
+          }
         }
-        else if (field === 'sharp') { var sh = parsePercent(raw); if (sh !== null) p.sharp = sh; }
+        else if (field === 'sharp') {
+          var sh = parsePercent(raw);
+          // 경기 체력도 같은 환경설정을 따라 글자로 나옵니다.
+          if (sh === null) sh = conditionFromWord(raw);
+          if (sh !== null) p.sharp = sh;
+        }
         else if (field === 'mins') { var mn = parseCount(raw); if (mn !== null) p.mins = mn; }
         // 'Apps (Sub)'는 '12 (3)' 꼴로 옵니다 — 앞의 선발 출전만 셉니다.
         else if (field === 'apps') { var ap = parseCount(raw); if (ap !== null) p.apps = ap; }
@@ -600,6 +680,14 @@
           // 열이 있으면 비어 있다는 것도 정보입니다 — 비었으면 '뛸 수 있음'으로 봅니다.
           p.out = !!(inj && inj !== '-' && inj !== '–');
           if (p.out) p.outReason = inj.length > 12 ? '부상' : inj;
+        }
+        else if (field === 'status') {
+          /*
+           * 여기서는 out을 true로만 올립니다. false로 내리면, 전용 '부상' 열이
+           * 이미 잡아 둔 선수를 잡음이 섞인 이 칸이 뛸 수 있는 것으로 되돌립니다.
+           */
+          var st = String(raw).trim();
+          if (OUT_WORDS[normWord(st)]) { p.out = true; p.outReason = st; }
         }
         else if (field.indexOf('attr:') === 0) {
           var v = parseAttrValue(raw);
@@ -624,7 +712,10 @@
         unknownColumns: head.unknown,
         imported: players.length,
         noPosition: players.filter(function (p) { return !p.positions.length; }).length,
-        noAttrs: players.filter(function (p) { return !p.attrCount; }).length
+        noAttrs: players.filter(function (p) { return !p.attrCount; }).length,
+        // 컨디션이 글자로 들어온 인원 — 화면이 "대략값"이라고 적는 근거입니다.
+        condFromWords: players.filter(function (p) { return p.condWord; }).length,
+        unknownCondition: Object.keys(unknownCond)
       }
     };
   }
@@ -933,7 +1024,11 @@
        */
       // 컨디션 열이 '94%'가 아니라 '좋음'처럼 글자일 수 있습니다. 숫자를 못 뽑아도
       // 원문은 넘겨야 합니다 — 상대 선발 분석이 그 글자를 씁니다.
-      if (p.cond !== undefined) cur.cond = p.cond;
+      if (p.cond !== undefined) {
+        cur.cond = p.cond;
+        // 이번에 %로 들어왔으면 지난번의 '대략값' 표시는 사라져야 합니다.
+        if (p.condWord !== undefined) cur.condWord = p.condWord; else delete cur.condWord;
+      }
       if (p.condition !== undefined) cur.condition = p.condition;
       if (p.sharp !== undefined) cur.sharp = p.sharp;
       if (p.mins !== undefined) cur.mins = p.mins;
@@ -972,6 +1067,9 @@
     cleanName: cleanName,
     parsePositions: parsePositions,
     parseAttrValue: parseAttrValue,
+    parsePercent: parsePercent,
+    conditionFromWord: conditionFromWord,
+    CONDITION_WORDS: CONDITION_WORDS,
     parseFoot: parseFoot,
     parseTraits: parseTraits,
     rtfToText: rtfToText,

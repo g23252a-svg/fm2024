@@ -980,7 +980,82 @@ await test('상대 유형을 안 고르면 그렇다고 말하고, 고르면 지
   await page.close();
 });
 
-// ── 15. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 15. 컨디션이 글자로 와도 로테이션이 나온다 ────────────────────────────
+/*
+ * 사용자가 실제로 겪은 일이다. FM 스쿼드 보기에 「컨디션」 열을 넣어 내보냈는데
+ * 「컨디션 한 번에 넣기」가 0/45명으로 남아 있었다. 파일은 멀쩡히 읽혔고
+ * 포지션까지 45명 전부 들어왔는데, 컨디션만 사라졌다 — 환경설정이 %가 아니라
+ * 글자('괜찮음')로 되어 있어서 숫자를 못 뽑고 조용히 버렸기 때문이다.
+ *
+ * 이 파일이 그 파일이다. 값이 들어오는지, 대략값이라고 말하는지, 그리고
+ * 로테이션이 실제로 나오는지까지 본다.
+ */
+await test('컨디션이 글자로 와도 값이 들어오고, 대략값이라고 말한다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await tab(page, '스쿼드');
+  await page.locator('#tab-squad input[type=file]').first().setInputFiles([{
+    name: 'ko-squad-condition-words.html', mimeType: 'text/html',
+    buffer: fx('ko-squad-condition-words.html')
+  }]);
+  await page.waitForTimeout(1800);
+
+  const st = await stored(page);
+  const withCond = st.players.filter((p) => typeof p.cond === 'number');
+  assert.ok(withCond.length >= 40,
+    `컨디션 열이 있는 파일인데 ${withCond.length}/${st.players.length}명만 들어왔다`);
+  // 이 파일에는 포지션 열도 있다 — 게이트가 열려야 한다
+  assert.ok(st.players.filter((p) => (p.positions || []).length).length >= 40, '포지션을 못 읽었다');
+
+  // 지친 선수와 쌩쌩한 선수가 실제로 갈려야 로테이션이 의미가 있다
+  const berg = st.players.find((p) => p.name === 'Lucas Bergvall');   // 아주 나쁨
+  const spence = st.players.find((p) => p.name === 'Djed Spence');    // 최고
+  assert.ok(berg.cond < spence.cond, '방전된 선수가 더 높게 읽혔다');
+  // '상태' 칸의 부상도 읽어야 한다 — 안 읽으면 부상 선수가 선발에 뽑힌다
+  assert.equal(st.players.find((p) => p.name === '손흥민').out, true, '부상 표시를 못 읽었다');
+
+  // 대략값이라고 말해야 한다 — 말 안 하면 구간 가운데 값을 정확한 값으로 믿는다
+  const squadTxt = await page.locator('#tab-squad').innerText();
+  assert.ok(/대략값/.test(squadTxt), `글자에서 읽었는데 대략값이라고 안 한다: ${squadTxt.slice(0, 400)}`);
+  assert.ok(/퍼센트/.test(squadTxt), '정확하게 만드는 방법을 안 알려 준다');
+
+  const fitCard = page.locator('#tab-squad details.card').filter({ hasText: '컨디션 한 번에 넣기' }).first();
+  assert.ok(/명 입력됨/.test(await fitCard.innerText()), '컨디션 카드가 없다');
+  if (!(await fitCard.evaluate((el) => el.open))) {
+    await fitCard.locator('summary').first().click();
+    await page.waitForTimeout(500);
+  }
+  // 어느 줄이 대략값인지 그 줄에 적혀야 한다
+  assert.ok(/괜찮음/.test(await fitCard.innerText()), '어느 줄이 글자에서 왔는지 표시가 없다');
+
+  // 그리고 진짜 목적 — 로테이션이 나와야 한다
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(2000);
+  const baseTxt = await page.locator('#tab-base').innerText();
+  assert.ok(/뎁스와 로테이션/.test(baseTxt), '로테이션 카드가 없다');
+  assert.ok(!/컨디션 미입력/.test(baseTxt), `컨디션을 넣었는데 미입력이라고 한다: ${baseTxt.slice(0, 300)}`);
+
+  // 사람이 직접 치면 대략값 표시가 사라져야 한다
+  await tab(page, '스쿼드');
+  await page.waitForTimeout(800);
+  const card = page.locator('#tab-squad details.card').filter({ hasText: '컨디션 한 번에 넣기' }).first();
+  if (!(await card.evaluate((el) => el.open))) {
+    await card.locator('summary').first().click();
+    await page.waitForTimeout(400);
+  }
+  const box = card.locator('input[type=number]').first();
+  await box.fill('90');
+  await page.waitForTimeout(600);
+  const first = (await stored(page)).players[0];
+  assert.equal(first.cond, 90, '직접 친 값이 안 들어갔다');
+  assert.equal(first.condWord, undefined, '직접 쳤는데 대략값 표시가 남아 있다');
+
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 16. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });
