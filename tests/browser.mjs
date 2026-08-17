@@ -872,6 +872,32 @@ await test('포지션을 모르면 전술 대신 무엇을 고칠지 말하고, 
   assert.ok(/시즌 기본 전술/.test(after), '전술이 안 나온다');
   assert.equal(await page.locator('#tab-base .pitch').count() >= 1, true, '배치가 안 그려졌다');
 
+  /*
+   * 추정으로 채운 상태는 게이트를 통과하지만 여전히 위험하다. 추정이 틀린 선수는
+   * 엉뚱한 자리에 선 채로 적합도만 70대로 보인다 — 아무것도 이상해 보이지 않아서
+   * 그대로 게임에 옮긴다. 그래서 추정이 남아 있는 동안은 계속 말해야 한다.
+   */
+  assert.ok(/포지션이 「추정」입니다/.test(after),
+    `추정으로 채운 상태인데 아무 말도 안 한다: ${after.slice(0, 300)}`);
+  assert.ok(/적합도가 높아 보여도/.test(after), '왜 위험한지가 없다');
+  await tab(page, '맞춤 전술');
+  await page.waitForTimeout(1600);
+  assert.ok(/포지션이 「추정」입니다/.test(await page.locator('#tab-result').innerText()),
+    '맞춤 전술에는 추정 경고가 없다');
+
+  // 사람이 직접 확정하면 경고가 사라져야 한다
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    d.players.forEach((p) => { delete p.posGuessed; });
+    localStorage.setItem(k, JSON.stringify(d));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(1800);
+  assert.ok(!/포지션이 「추정」입니다/.test(await page.locator('#tab-base').innerText()),
+    '추정 표시를 지웠는데도 경고가 남아 있다');
+
   // 손으로 고치면 추정 표시가 사라진다
   await tab(page, '스쿼드');
   await page.waitForTimeout(900);

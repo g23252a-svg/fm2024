@@ -2069,6 +2069,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
     var gateR = positionGate(res);
     if (gateR) { root.appendChild(gateR); return; }
+    var guessNoteR = guessedNote(res);
+    if (guessNoteR) root.appendChild(guessNoteR);
 
     // 어느 슬롯을 쓰는지, 그리고 왜.
     if (pick) {
@@ -2468,6 +2470,47 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    */
   var POS_GATE_MAX_UNKNOWN = 3;   // 선발 중 이만큼 모르면 배치를 믿을 수 없습니다
 
+  /*
+   * 추정으로 채운 자리는 계속 「추정」이라고 말해야 합니다.
+   *
+   * 게이트를 붙이고 나서 실제로 돌려 보니 더 위험한 상태가 하나 생겼습니다.
+   * 추정으로 채우면 적합도가 22에서 71로 올라가는데, 추정이 틀린 선수는 여전히
+   * 엉뚱한 자리에 섭니다 — 중앙 미드필더가 센터백에 서 있는데 적합도는 72로
+   * 보입니다. 아무것도 이상해 보이지 않으니 그대로 게임에 옮기게 됩니다.
+   *
+   * 적합도가 낮을 때보다 이쪽이 더 나쁩니다. 그래서 추정이 남아 있는 동안은
+   * 전술 위에 계속 말합니다.
+   */
+  function guessedNote(res) {
+    var guessed = res.xi.lineup.filter(function (l) {
+      return l.player && l.player.posGuessed;
+    });
+    if (!guessed.length) return null;
+    var names = guessed.map(function (l) {
+      return l.player.name + '(' + posLabel(l.slot) + ')';
+    });
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'warn high' }, [
+        h('span', { class: 'ic', text: '!' }),
+        h('span', {}, [
+          h('b', { text: '선발 ' + guessed.length + '명은 포지션이 「추정」입니다. ' }),
+          '아래 적합도가 높아 보여도 그건 추정한 자리 기준입니다 — 추정이 틀렸으면 '
+          + '엉뚱한 자리에 선 채로 점수만 높게 나옵니다.',
+          h('span', { class: 'fixnote', text: names.join(' · ') }),
+          h('span', { class: 'fixnote', text:
+            '추정은 실제 스쿼드로 재면 셋 중 둘이 맞습니다. 나머지 하나가 이 안에 있을 수 있습니다. '
+            + 'FM 스쿼드 보기에 「포지션」 열을 넣어 다시 내보내면 이 경고가 사라집니다.' })
+        ])
+      ]),
+      h('div', { class: 'row', style: 'margin-top:9px' }, [
+        h('button', {
+          class: 'btn sm',
+          onclick: function () { S.tab = 'squad'; S._open.bulkPos = true; render(); window.scrollTo(0, 0); }
+        }, ['포지션 확인하러 가기'])
+      ])
+    ]);
+  }
+
   function positionGate(res) {
     var unknown = res.xi.lineup.filter(function (l) {
       return l.player && !(l.player.positions || []).length;
@@ -2544,6 +2587,8 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
 
     var gate = positionGate(res);
     if (gate) { root.appendChild(gate); return; }
+    var guessNote = guessedNote(res);
+    if (guessNote) root.appendChild(guessNote);
 
     root.appendChild(h('div', { class: 'card' }, [
       h('h2', { text: '시즌 기본 전술' }),
