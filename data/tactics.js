@@ -248,7 +248,7 @@
     {
       id: 'opp-counterpress', group: '상대 압박',
       when: function (o) { return o.transitionLost === 'counterpress'; },
-      axis: { tempo: 0.5, directness: 0.4 },
+      axis: { tempo: 0.6, directness: 0.4 },
       toggle: { distquick: 1.2, pod: -0.8 },
       role: { 'first-touch': 0.5 },
       why: '상대가 공을 잃자마자 곧바로 역압박합니다 — 뺏은 직후 2~3초가 가장 위험합니다.',
@@ -298,7 +298,7 @@
     {
       id: 'opp-playmaker-deep', group: '상대 선수',
       when: function (o) { return o.traits.indexOf('playmaker-deep') >= 0; },
-      axis: { loe: 0.7, press: 0.5 },
+      axis: { loe: 0.7, press: 0.6 },
       toggle: { ptp: 1.4, psgd: 1 },
       plan: { 'press-high': 1.2 },
       role: { presser: 1 },
@@ -352,7 +352,10 @@
     {
       id: 'opp-long-ball', group: '상대 성향',
       when: function (o) { return o.traits.indexOf('long-ball') >= 0 || o.directness >= 4; },
-      axis: { dline: -0.3, press: -0.3 },
+      // 0.3씩 밀면 Math.round에서 한 칸도 안 움직입니다 — 규칙이 걸려도 지시는
+      // 그대로였습니다. 이 상황에서 라인을 내리고 압박을 줄이는 것은 실제 처방이라
+      // 한 칸은 움직여야 합니다.
+      axis: { dline: -0.7, press: -0.7, loe: -0.6 },
       toggle: { ptp: -0.8 },
       role: { aerial: 1.4, 'defensive-cover': 0.6 },
       why: '상대가 후방에서 길게 넘겨 압박을 건너뜁니다.',
@@ -369,7 +372,7 @@
     {
       id: 'opp-low-stamina', group: '상대 성향',
       when: function (o) { return o.traits.indexOf('low-stamina') >= 0; },
-      axis: { tempo: 0.6, press: 0.5, width: 0.4 },
+      axis: { tempo: 0.6, press: 0.6, width: 0.4 },
       plan: { 'press-high': 1 },
       why: '상대 체력이 떨어져 있습니다.',
       action: '템포를 올려 상대를 계속 뛰게 하세요. 60분 이후에 격차가 벌어지므로 그 시점에 쓸 교체 카드를 남겨 두는 게 이 경기의 승부처입니다.'
@@ -377,7 +380,14 @@
     {
       id: 'opp-setpiece', group: '상대 성향',
       when: function (o) { return o.traits.indexOf('set-piece-threat') >= 0; },
-      axis: { tackling: -0.5 },
+      /*
+       * -0.5는 Math.round(-0.5)가 -0이라 한 칸도 안 움직입니다. 이 규칙은 축
+       * 하나만 밀었으므로 걸려도 아무 일이 없었습니다 — 조언 문구만 떴습니다.
+       * 세트피스가 강한 상대에게는 불필요한 파울을 줄이는 것이 실제 처방이라
+       * 한 칸은 내려야 하고, 박스 안 제공권도 같이 챙겨야 합니다.
+       */
+      axis: { tackling: -0.7 },
+      role: { aerial: 1.0 },
       why: '상대가 세트피스에서 위협적입니다.',
       action: '불필요한 파울과 코너를 줄이도록 태클을 자제시키고, 세트피스 수비에서 제공권 있는 선수를 골문 앞에 배치하세요.'
     },
@@ -409,7 +419,7 @@
     {
       id: 'opp-very-defensive', group: '상대 멘탈리티',
       when: function (o) { return o.mentality <= 1; },
-      axis: { mentality: 0.5, dline: 0.6, width: 0.6 },
+      axis: { mentality: 0.6, dline: 0.6, width: 0.6 },
       toggle: { wbib: 1.2, counter: -1.2 },
       plan: { possession: 1.4, 'wide-cross': 1 },
       why: '상대가 수비적으로 나옵니다 — 공은 우리가 대부분 갖게 됩니다.',
@@ -426,9 +436,24 @@
       action: '폭을 넓히고 양쪽 오버랩을 켜세요. 상대 좁은 대형은 옆으로 끌려 나오는 순간 중앙에 틈이 생깁니다.'
     },
     {
+      /*
+       * 템포는 지금까지 어떤 규칙도 보지 않던 축이었습니다. 상대가 빠르게
+       * 굴리면 우리가 정렬하기 전에 다음 패스가 나갑니다 — 압박을 따라 올리면
+       * 계속 뚫리고, 블록을 유지하면서 간격을 좁히는 쪽이 맞습니다.
+       */
+      id: 'opp-fast-tempo', group: '상대 성향',
+      when: function (o) { return o.tempo >= 4; },
+      axis: { press: -0.6, width: -0.6, tempo: 0.4 },
+      toggle: { ptp: -0.6 },
+      role: { 'defensive-cover': 0.8, 'overload-centre': 0.4 },
+      why: '상대가 볼을 아주 빠르게 굴립니다 — 우리가 자리를 잡기 전에 다음 패스가 나갑니다.',
+      action: '따라가며 압박하지 말고 간격을 좁혀 블록을 유지하세요. 한 명이 나가면 그 옆이 그대로 열립니다.'
+    },
+    {
       id: 'opp-wide', group: '상대 형태',
       when: function (o) { return o.width >= 5; },
-      axis: { width: -0.5 },
+      // -0.5는 Math.round(-0.5)가 -0이라 아무 일도 안 일어납니다. 경계값을 피합니다.
+      axis: { width: -0.7 },
       role: { 'overload-centre': 0.8 },
       why: '상대가 넓게 섭니다 — 중앙 사이 간격이 벌어져 있습니다.',
       action: '폭을 조금 좁혀 중앙에 사람을 모으세요. 상대가 좌우로 벌어져 있으면 중앙 통과가 오히려 쉽습니다.'
@@ -438,7 +463,7 @@
     {
       id: 'ctx-away-underdog', group: '경기 상황',
       when: function (o, c) { return c.venue === 'away' && c.odds === 'weak'; },
-      axis: { mentality: -0.8, dline: -0.5, press: -0.4, tempo: -0.3 },
+      axis: { mentality: -0.8, dline: -0.6, press: -0.4, tempo: -0.3 },
       toggle: { regroup: 1, counter: 1.2, pod: -0.6 },
       plan: { counter: 1.6, 'low-block': 1.2 },
       why: '원정이고 전력에서 밀립니다.',
@@ -447,7 +472,7 @@
     {
       id: 'ctx-home-favourite', group: '경기 상황',
       when: function (o, c) { return c.venue === 'home' && c.odds === 'strong'; },
-      axis: { mentality: 0.6, dline: 0.5, press: 0.5, loe: 0.4 },
+      axis: { mentality: 0.6, dline: 0.6, press: 0.6, loe: 0.4 },
       toggle: { pod: 0.6 },
       plan: { 'press-high': 1, possession: 0.8 },
       why: '홈이고 전력에서 앞섭니다.',
@@ -456,7 +481,7 @@
     {
       id: 'ctx-draw-ok', group: '경기 상황',
       when: function (o, c) { return c.goal === 'draw-ok'; },
-      axis: { mentality: -0.5, tempo: -0.3, timewaste: 0.5 },
+      axis: { mentality: -0.6, tempo: -0.3, timewaste: 0.6 },
       toggle: { regroup: 0.8 },
       plan: { 'low-block': 0.8 },
       why: '무승부도 받아들일 수 있는 경기입니다.',
@@ -465,7 +490,7 @@
     {
       id: 'ctx-must-win', group: '경기 상황',
       when: function (o, c) { return c.goal === 'must-win'; },
-      axis: { mentality: 0.7, dline: 0.4, press: 0.4, tempo: 0.4, timewaste: -0.5 },
+      axis: { mentality: 0.7, dline: 0.4, press: 0.4, tempo: 0.4, timewaste: -0.6 },
       toggle: { counterpress: 0.8 },
       plan: { 'press-high': 0.8 },
       why: '반드시 이겨야 하는 경기입니다.',
@@ -476,7 +501,7 @@
     {
       id: 'sq-low-stamina', group: '우리 스쿼드', tier: 'key',
       when: function (o, c, s) { return s.stamina > 0 && s.stamina < 12; },
-      axis: { press: -0.8, tempo: -0.5 },
+      axis: { press: -0.8, tempo: -0.6 },
       toggle: { counterpress: -1.2 },
       plan: { 'press-high': -2 },
       why: '우리 선발진의 스태미너가 낮습니다(평균 ' + '{stamina}' + ').',
@@ -566,6 +591,91 @@
     { id: 'even', ko: '비슷함' },
     { id: 'weaker', ko: '우리보다 약함' }
   ];
+
+  /*
+   * ── 상대 유형 프리셋 ────────────────────────────────────────────────────
+   *
+   * 「맞춤 전술」이 약한 진짜 이유는 엔진이 아니라 입력이었습니다. 상대 성향을
+   * 슬라이더 여덟 개로 받는데, 아무도 여덟 개를 매 경기 맞추지 않습니다.
+   * 기본값 그대로 두면 팀 지시 축 열한 개 중 **하나도** 안 밀립니다 — 즉
+   * 「맞춤 전술」의 팀 지시가 「기본 전술」과 완전히 같아집니다. 포메이션 상성만
+   * 반영되고 나머지는 다 죽어 있었습니다.
+   *
+   * 사람은 상대를 슬라이더로 기억하지 않습니다. "얘네는 라인 올리고 압박한다",
+   * "얘네는 내려앉아서 역습한다"로 기억합니다. 그걸 한 번에 넣게 합니다.
+   *
+   * 값은 게임에서 읽어 온 것이 아니라 그 유형이 보통 이렇다는 뜻입니다.
+   * 누른 뒤에도 슬라이더는 그대로 만질 수 있습니다.
+   */
+  var OPP_PRESETS = [
+    {
+      id: 'gegen', ko: '하이라인 강압박', short: '게겐프레싱',
+      why: '라인을 올려 압축하고 뺏기면 곧바로 다시 덮칩니다. 뒷공간이 넓게 남습니다.',
+      set: { dline: 4, loe: 4, press: 4, mentality: 4, width: 4, tempo: 3, directness: 2,
+        transitionLost: 'counterpress', transitionWon: 'hold' }
+    },
+    {
+      id: 'lowblock', ko: '깊은 블록 · 역습', short: '버스+역습',
+      why: '내려앉아 공간을 지우고 뺏으면 한 번에 넘깁니다. 우리가 열어야 합니다.',
+      set: { dline: 0, loe: 0, press: 1, mentality: 1, width: 1, tempo: 2, directness: 4,
+        transitionLost: 'regroup', transitionWon: 'counter' }
+    },
+    {
+      id: 'possession', ko: '점유 · 짧은 패스', short: '점유',
+      why: '공을 오래 잡고 천천히 옮깁니다. 우리가 공을 못 만지는 경기가 됩니다.',
+      set: { dline: 3, loe: 3, press: 3, mentality: 3, width: 3, tempo: 1, directness: 0,
+        transitionLost: 'counterpress', transitionWon: 'hold' }
+    },
+    {
+      id: 'direct', ko: '롱볼 · 직선', short: '롱볼',
+      why: '뒤에서 곧장 앞으로 넘깁니다. 세컨볼 싸움이 경기를 가릅니다.',
+      set: { dline: 2, loe: 2, press: 2, mentality: 3, width: 3, tempo: 4, directness: 4,
+        transitionLost: 'regroup', transitionWon: 'hold' }
+    },
+    {
+      id: 'wide', ko: '측면 · 크로스 중심', short: '측면',
+      why: '폭을 넓게 쓰고 크로스를 많이 올립니다. 우리 풀백이 계속 1대1을 겪습니다.',
+      set: { dline: 2, loe: 2, press: 2, mentality: 3, width: 5, tempo: 3, directness: 3,
+        transitionLost: 'regroup', transitionWon: 'hold' }
+    },
+    {
+      id: 'narrow', ko: '중원 장악 · 좁게', short: '중앙',
+      why: '중앙에 사람을 몰아 숫자로 이깁니다. 측면이 비는 대신 중앙이 막힙니다.',
+      set: { dline: 3, loe: 3, press: 3, mentality: 3, width: 0, tempo: 2, directness: 1,
+        transitionLost: 'counterpress', transitionWon: 'hold' }
+    },
+    {
+      id: 'balanced', ko: '특징 없음 · 균형', short: '균형',
+      why: '뚜렷한 성향이 없습니다. 이걸 고르면 포메이션 상성만 반영됩니다.',
+      set: { dline: 2, loe: 2, press: 2, mentality: 3, width: 3, tempo: 2, directness: 2,
+        transitionLost: 'regroup', transitionWon: 'hold' }
+    }
+  ];
+
+  /*
+   * 상대 전력별 기대 승점.
+   *
+   * 「경기 후」 탭은 상대 전력을 저장만 하고 쓰지 않았습니다. 그래서 첼시 원정
+   * 1:0 승리와 최하위 팀 홈 1:0 승리가 완전히 같은 값이었습니다. 그 둘은 전혀
+   * 다른 결과인데도요 — 강팀 상대로 기대 득점 1.4에 1골은 훌륭한 경기이고,
+   * 약체 상대로 기대 득점 2.5에 1골은 결정력 문제입니다.
+   *
+   * 아래 값은 **이 도구의 잣대**이지 축구의 법칙이 아닙니다. 리그 순위표에서
+   * 대략 이 정도가 나옵니다 — 홈에서 약체를 만나면 이겨야 하고, 강팀 원정에서
+   * 승점 1이면 잘한 것입니다. 화면에 기준을 같이 적어서, 동의하지 않으면
+   * 그 줄을 무시할 수 있게 합니다.
+   */
+  var EXPECTED_PTS = {
+    home: { weaker: 2.4, even: 1.7, stronger: 1.1 },
+    away: { weaker: 1.8, even: 1.2, stronger: 0.6 }
+  };
+
+  /*
+   * 경기 전에 고르는 「우세/비슷/열세」와 경기 중에 고르는 「상대 전력」은
+   * 같은 것을 반대 방향으로 말합니다 — 우리가 우세하면 상대는 약체입니다.
+   * 두 화면이 따로 놀지 않도록 여기서 한 번만 맞춰 둡니다.
+   */
+  var ODDS_TO_OPP = { strong: 'weaker', even: 'even', weak: 'stronger' };
 
   /*
    * 전술 친숙도 (Tactical Familiarity).
@@ -1296,6 +1406,9 @@
     CONDITION_BANDS: CONDITION_BANDS,
     DEPTH_TIERS: DEPTH_TIERS,
     MATCH_TAGS: MATCH_TAGS,
+    OPP_PRESETS: OPP_PRESETS,
+    EXPECTED_PTS: EXPECTED_PTS,
+    ODDS_TO_OPP: ODDS_TO_OPP,
     MATCH_RESULTS: MATCH_RESULTS,
     MATCH_STATS: MATCH_STATS,
     INMATCH_RULES: INMATCH_RULES,

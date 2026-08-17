@@ -2284,6 +2284,94 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(tallSp.weakDefence, null, '제공권이 좋은데 수비 경고가 나왔다');
 }
 
+// ── 규칙이 걸리면 실제로 무언가 움직여야 한다 ─────────────────────────────
+/*
+ * 「맞춤 전술이 약하다」의 원인 하나가 여기 있었다. 상대가 넓게 서면 걸리는
+ * 규칙(opp-wide)은 width를 -0.5 밀었는데, 축 인덱스는 Math.round(기본값 + 누적)
+ * 이라 -0.5는 Math.round(-0.5) === -0 이 되어 **한 칸도 안 움직였다.**
+ * 롱볼 규칙도 -0.3씩이라 혼자서는 아무 일도 안 했다.
+ *
+ * 규칙이 걸렸는데 화면이 그대로면 사용자는 도구가 반응하지 않는다고 느낀다.
+ * 그래서 규칙마다 "혼자 걸렸을 때 최소한 하나는 움직이는가"를 못박는다.
+ */
+{
+  const neutralOpp = {
+    formationId: '4231', mentality: 3, dline: 2, loe: 2, press: 2,
+    width: 3, directness: 2, tempo: 2, transitionLost: 'regroup', transitionWon: 'hold', traits: []
+  };
+  const neutralCtx = { venue: 'home', odds: 'even', goal: 'win' };
+
+  /*
+   * 두 가지를 본다.
+   *
+   * ① 축을 정확히 ±0.5로 미는 규칙이 없어야 한다. Math.round(-0.5)는 -0이라
+   *    음수 쪽 0.5는 아예 무효고, 양수 쪽과 비대칭이다. 0.4나 0.6으로 적어야 한다.
+   * ② 규칙마다 실제로 닿을 수 있는 통로가 하나는 있어야 한다 — 혼자서 축을
+   *    움직이든지, 토글·역할·플랜을 밀든지. 작은 축 밀기만 있고 나머지가 비면
+   *    그 규칙은 걸려도 화면이 그대로다(조언 문구만 뜬다).
+   *
+   * 여러 규칙이 합쳐져 한 칸을 만드는 '기여형' 밀기는 정상이다. 그건 ②로 걸러진다.
+   */
+  const halfStep = [];
+  const dead = [];
+  for (const rule of TD.RULES) {
+    const axisKeys = Object.keys(rule.axis || {});
+    for (const k of axisKeys) {
+      if (Math.abs(rule.axis[k]) === 0.5) halfStep.push(`${rule.id}.${k} = ${rule.axis[k]}`);
+    }
+    const movesAlone = axisKeys.some((k) => {
+      const def = TD.AXES[k];
+      if (!def) return false;
+      const to = Math.max(0, Math.min(def.labels.length - 1, Math.round(def.def + rule.axis[k])));
+      return to !== def.def;
+    });
+    const hasOther = Object.keys(rule.toggle || {}).length
+      || Object.keys(rule.role || {}).length
+      || Object.keys(rule.plan || {}).length;
+    if (!movesAlone && !hasOther) {
+      dead.push(`${rule.id} — ${axisKeys.map((k) => k + ' ' + rule.axis[k]).join(', ')}`);
+    }
+  }
+  assert.deepEqual(halfStep, [],
+    'Math.round(-0.5)는 -0이라 무효다. 0.4나 0.6으로 적어라:\n  ' + halfStep.join('\n  '));
+  assert.deepEqual(dead, [],
+    '규칙이 걸려도 화면이 그대로다 — 축도 안 움직이고 토글·역할·플랜도 없다:\n  ' + dead.join('\n  '));
+
+  /*
+   * 그리고 상대 유형별로 실제로 답이 갈리는지 본다. 프리셋 일곱 개를 넣었는데
+   * 결과가 다 같으면 「맞춤」이 아니다.
+   */
+  const seen = new Set();
+  const noMove = [];
+  for (const preset of TD.OPP_PRESETS) {
+    const r = E.generate({
+      players: squad, opponent: { ...neutralOpp, ...preset.set }, context: neutralCtx
+    });
+    const shifted = Object.values(r.instructions.axes).filter((a) => a.shifted).length;
+    const on = Object.keys(r.instructions.toggles).filter((k) => r.instructions.toggles[k].on).sort().join(',');
+    seen.add(shifted + '|' + on + '|' + r.xi.lineup.map((l) => l.role.abbr + l.duty).join(''));
+    // '특징 없음'은 안 움직이는 게 맞다
+    if (preset.id !== 'balanced' && shifted === 0) noMove.push(preset.ko);
+  }
+  assert.deepEqual(noMove, [],
+    `이 상대 유형에는 팀 지시가 하나도 안 바뀐다 — 「맞춤」이 아니다: ${noMove.join(', ')}`);
+  assert.ok(seen.size >= 5,
+    `상대 유형 ${TD.OPP_PRESETS.length}개인데 서로 다른 답이 ${seen.size}가지뿐이다`);
+
+  // 프리셋 데이터 정합성 — 없는 축을 적어 두면 조용히 무시된다
+  const OPP_KEYS = new Set(['dline', 'loe', 'press', 'mentality', 'width', 'tempo',
+    'directness', 'transitionLost', 'transitionWon']);
+  for (const p of TD.OPP_PRESETS) {
+    assert.ok(p.id && p.ko && p.short && p.why, `상대 유형 ${p.id}에 설명이 빠졌다`);
+    for (const k of Object.keys(p.set)) {
+      assert.ok(OPP_KEYS.has(k), `${p.id}에 알 수 없는 항목 ${k}`);
+      if (k.indexOf('transition') === 0) continue;
+      const v = p.set[k];
+      assert.ok(Number.isInteger(v) && v >= 0 && v <= 6, `${p.id}의 ${k}가 ${v}다`);
+    }
+  }
+}
+
 // ── 포지션 추정 ───────────────────────────────────────────────────────────
 /*
  * 등록 포지션이 비면 이 도구는 사실상 아무것도 못 한다. 포지션 친숙도가 전원

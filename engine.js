@@ -1908,6 +1908,76 @@
   }
 
   /*
+   * ── 같은 상대를 다시 만날 때 ────────────────────────────────────────────
+   *
+   * 기록을 쌓아 놓고 다음 경기 준비에 안 쓰면 절반만 한 것입니다. 첼시를 두 번째
+   * 만나는데 지난번에 무슨 일이 있었는지 도구가 말해 주지 않으면, 사람이
+   * 「경기 후」 탭을 열어 목록을 훑어야 합니다. 그러면 아무도 안 봅니다.
+   *
+   * 이름은 사람이 친 글자라 표기가 흔들립니다(첼시 / 첼시 FC / Chelsea).
+   * 공백과 대소문자를 걷어내고 한쪽이 다른 쪽을 포함하면 같은 팀으로 봅니다 —
+   * 자동으로 뭘 바꾸지는 않고 보여 주기만 하므로, 틀려도 손해가 작습니다.
+   */
+  function normTeam(x) {
+    return String(x == null ? '' : x).replace(/\s+/g, '').replace(/fc|f\.c\./gi, '').toLowerCase();
+  }
+
+  function opponentHistory(matches, name) {
+    var key = normTeam(name);
+    if (!key) return null;
+    var past = (matches || []).filter(function (m) {
+      if (!m || num(m.gf) === null || num(m.ga) === null) return false;
+      var k = normTeam(m.opp);
+      return k && (k === key || k.indexOf(key) >= 0 || key.indexOf(k) >= 0);
+    });
+    if (!past.length) return null;
+
+    var w = 0, d = 0, l = 0, gf = 0, ga = 0;
+    past.forEach(function (m) {
+      gf += m.gf; ga += m.ga;
+      if (m.gf > m.ga) w++; else if (m.gf === m.ga) d++; else l++;
+    });
+
+    // 이 상대에게 반복해서 당한 장면 — 다음 경기 전에 이것만 봐도 값어치가 있습니다.
+    var tagCount = {};
+    past.forEach(function (m) {
+      var seen = {};
+      (m.flags || []).forEach(function (id) {
+        if (seen[id]) return;
+        seen[id] = 1;
+        tagCount[id] = (tagCount[id] || 0) + 1;
+      });
+    });
+    var repeats = (TD.MATCH_TAGS || []).filter(function (t) {
+      return (tagCount[t.id] || 0) >= 2 || ((tagCount[t.id] || 0) >= 1 && past.length === 1);
+    }).map(function (t) {
+      return { id: t.id, ko: t.ko, count: tagCount[t.id], fix: t.fix };
+    });
+
+    var withXg = past.filter(function (m) { return num(m.us && m.us.xg) !== null; });
+    var lines = past.slice().reverse().map(function (m) {
+      return {
+        venue: m.venue === 'away' ? '원정' : m.venue === 'home' ? '홈' : '—',
+        score: m.gf + ':' + m.ga,
+        result: m.gf > m.ga ? 'w' : m.gf === m.ga ? 'd' : 'l',
+        xg: num(m.us && m.us.xg), xgAgainst: num(m.them && m.them.xg),
+        flags: (m.flags || []).map(function (id) {
+          var t = (TD.MATCH_TAGS || []).filter(function (x) { return x.id === id; })[0];
+          return t ? t.ko : id;
+        })
+      };
+    });
+
+    return {
+      name: name, n: past.length, w: w, d: d, l: l, gf: gf, ga: ga,
+      xgFor: withXg.length ? Math.round(sum(withXg.map(function (m) { return m.us.xg; })) * 10) / 10 : null,
+      xgSample: withXg.length,
+      repeats: repeats, lines: lines,
+      text: '이 상대와 ' + past.length + '경기 — ' + w + '승 ' + d + '무 ' + l + '패 (' + gf + ':' + ga + ')'
+    };
+  }
+
+  /*
    * ── 포지션 추정 ─────────────────────────────────────────────────────────
    *
    * FM 스쿼드 내보내기에 「포지션」 열이 없으면 이 도구는 사실상 아무것도 못 합니다.
@@ -2320,16 +2390,114 @@
      * 뽑은 두 평균을 한 문장에 넣으면 어느 경기에 대해서도 참이 아닌 말이 됩니다.
      * 기준은 경기 중 규칙(점유율 58%+ / 유효 슈팅 3개 이하)과 같게 둡니다.
      */
-    if (mParked.length >= 3) {
-      var pAvg = sum(mParked.map(function (m) { return m.us.possession; })) / mParked.length;
-      var sAvg = sum(mParked.map(function (m) { return m.us.sot; })) / mParked.length;
+    /*
+     * 강팀 상대로 점유율이 높고 유효 슈팅이 적은 것은 정상입니다 — 그쪽이
+     * 내려앉은 게 아니라 우리가 밀린 것일 수도 있습니다. 상대 전력을 아는
+     * 경기가 충분하면 강팀을 빼고 봅니다.
+     */
+    var parkedPool = mParked.filter(function (m) { return m.oppLevel !== 'stronger'; });
+    if (parkedPool.length < 3) parkedPool = mParked;
+    if (parkedPool.length >= 3) {
+      var mParkedUse = parkedPool;
+      var pAvg = sum(mParkedUse.map(function (m) { return m.us.possession; })) / mParkedUse.length;
+      var sAvg = sum(mParkedUse.map(function (m) { return m.us.sot; })) / mParkedUse.length;
       if (pAvg >= 58 && sAvg <= 3) {
         findings.push({
           kind: 'parked-repeat', level: 'high',
-          text: '점유율과 유효 슈팅이 같이 있는 ' + mParked.length + '경기에서 평균 점유율 '
+          text: '점유율과 유효 슈팅이 같이 있는 ' + mParkedUse.length + '경기에서 평균 점유율 '
             + Math.round(pAvg) + '%인데 경기당 유효 슈팅이 ' + (Math.round(sAvg * 10) / 10)
             + '개입니다 — 상대가 내려앉으면 반복해서 못 열고 있습니다.',
           fix: '한 경기의 문제가 아니라 형태의 문제입니다. 내려앉은 블록을 여는 형태(폭을 잡는 측면 자원 + 오버랩 + 박스 안 제공권)를 슬롯 하나로 만들어 두세요.'
+        });
+      }
+    }
+
+    /*
+     * ── 상대 전력별로 갈라 보기 ─────────────────────────────────────────
+     *
+     * 지금까지 상대 전력을 저장만 하고 안 썼습니다. 그래서 첼시 홈 1:0 승리와
+     * 최하위 팀 홈 1:0 승리가 같은 값이었습니다. 전혀 다른 결과인데도요.
+     *
+     * 섞어 놓은 평균은 어느 쪽 문제인지 못 가립니다 — 강팀 상대로 기대 득점을
+     * 못 만드는 것과 약체 상대로 만들어 놓고 못 넣는 것은 처방이 정반대입니다.
+     * 그래서 보정 계수를 지어내는 대신 **묶음을 나눠서 각각 말합니다.**
+     */
+    var TIER_KO = { weaker: '약체', even: '비슷한 상대', stronger: '강팀' };
+    var EXP = TD.EXPECTED_PTS || {};
+    function ptsOf(m) { return m.gf > m.ga ? 3 : m.gf === m.ga ? 1 : 0; }
+
+    var byTier = ['weaker', 'even', 'stronger'].map(function (tier) {
+      var ms = list.filter(function (m) { return m.oppLevel === tier; });
+      if (!ms.length) return null;
+      var pts = sum(ms.map(ptsOf));
+      // 기대 승점은 장소를 아는 경기에서만 셉니다 — 모르는 장소를 홈으로 치면 안 됩니다.
+      var withVenue = ms.filter(function (m) { return m.venue === 'home' || m.venue === 'away'; });
+      var exp = sum(withVenue.map(function (m) {
+        return (EXP[m.venue] && EXP[m.venue][tier]) || 0;
+      }));
+      var tXg = ms.filter(has('us', 'xg'));
+      return {
+        tier: tier, ko: TIER_KO[tier], n: ms.length,
+        w: ms.filter(function (m) { return m.gf > m.ga; }).length,
+        d: ms.filter(function (m) { return m.gf === m.ga; }).length,
+        l: ms.filter(function (m) { return m.gf < m.ga; }).length,
+        pts: pts, expPts: Math.round(exp * 10) / 10, expFrom: withVenue.length,
+        short: withVenue.length ? Math.round((exp - sum(withVenue.map(ptsOf))) * 10) / 10 : null,
+        xg: tXg.length ? Math.round(sum(tXg.map(function (m) { return m.us.xg; })) * 10) / 10 : null,
+        goals: tXg.length ? sum(tXg.map(function (m) { return m.gf; })) : null,
+        xgSample: tXg.length
+      };
+    }).filter(Boolean);
+
+    var noTier = list.filter(function (m) {
+      return m.oppLevel !== 'weaker' && m.oppLevel !== 'even' && m.oppLevel !== 'stronger';
+    }).length;
+    if (noTier && noTier === n) {
+      findings.push({
+        kind: 'no-tier', level: 'note',
+        text: '저장한 경기에 상대 전력이 없어 상대별로 가를 수 없습니다.',
+        fix: '「경기 중」 탭에서 상대 전력을 고르고 저장하면, 약체 상대로 못 이기는 것과 강팀 상대로 지는 것을 따로 봅니다 — 처방이 정반대입니다.'
+      });
+    }
+
+    /*
+     * 승점이 기대에 크게 못 미치는 묶음을 짚습니다. 시즌은 대개 한 묶음에서
+     * 무너지는데, 전체 평균만 보면 그게 안 보입니다.
+     */
+    byTier.forEach(function (t) {
+      if (t.expFrom < 3 || t.short === null) return;
+      if (t.short < 2) return;
+      findings.push({
+        kind: 'tier-' + t.tier, level: t.short >= 4 ? 'high' : 'note',
+        text: t.ko + ' 상대 ' + t.expFrom + '경기에서 승점 ' + sum(list.filter(function (m) {
+          return m.oppLevel === t.tier && (m.venue === 'home' || m.venue === 'away');
+        }).map(ptsOf)) + '점 — 이 도구의 기준(' + t.expPts + '점)보다 ' + t.short + '점 모자랍니다.',
+        fix: t.tier === 'weaker'
+          ? '시즌은 여기서 무너집니다. 약체는 대개 내려앉으므로, 블록을 여는 형태(폭을 잡는 측면 + 오버랩 + 박스 안 제공권)를 슬롯 하나로 만들어 두세요.'
+          : t.tier === 'stronger'
+            ? '강팀 상대 승점은 원래 적습니다. 그래도 크게 벌어지면 형태보다 멘탈리티와 수비 라인을 먼저 보세요 — 맞불을 놓다 벌어지는 경우가 많습니다.'
+            : '비슷한 상대에서 벌어지면 순위가 그대로 갈립니다. 홈에서 내려앉은 상대를 못 여는지, 원정에서 역습에 뚫리는지 먼저 가르세요.',
+        detail: '기준: 홈 약체 2.4 · 동급 1.7 · 강팀 1.1 / 원정 1.8 · 1.2 · 0.6 (이 도구의 잣대입니다)'
+      });
+    });
+
+    /*
+     * 마무리가 문제로 잡혔으면, 어느 상대에서 그런지까지 말합니다.
+     * 강팀 상대로 못 넣는 것은 흔한 일이고, 약체 상대로 못 넣는 것이 진짜 문제입니다.
+     */
+    var badFinish = findings.filter(function (f) { return f.kind === 'finishing-bad'; })[0];
+    if (badFinish) {
+      var worst = byTier.filter(function (t) { return t.xgSample >= 3 && t.xg !== null; })
+        .map(function (t) { return { t: t, gap: t.xg - t.goals }; })
+        .sort(function (x, y) { return y.gap - x.gap; })[0];
+      if (worst && worst.gap >= 1.5) {
+        findings.push({
+          kind: 'finishing-tier', level: 'high',
+          text: '그 부족분은 ' + worst.t.ko + ' 상대에 몰려 있습니다 — ' + worst.t.xgSample
+            + '경기에서 기대 득점 ' + worst.t.xg + '에 ' + worst.t.goals + '골.',
+          fix: worst.t.tier === 'weaker'
+            ? '약체 상대로 기회를 만들어 놓고 못 넣고 있습니다. 이건 형태가 아니라 마무리하는 선수의 문제입니다.'
+            : '강팀 상대로 못 넣는 것은 흔합니다. 약체 상대 기록이 정상이라면 스트라이커를 갈아치울 이유는 아직 없습니다.'
         });
       }
     }
@@ -2394,7 +2562,10 @@
       };
     });
 
-    return { record: record, stats: stats, findings: findings, perMatch: perMatch, tagCount: tagCount };
+    return {
+      record: record, stats: stats, findings: findings, perMatch: perMatch,
+      tagCount: tagCount, byTier: byTier, noTier: noTier
+    };
   }
 
   /*
@@ -4061,6 +4232,7 @@
     rotationPlan: rotationPlan,
     matchReview: matchReview,
     guessPositions: guessPositions,
+    opponentHistory: opponentHistory,
     condBand: condBand,
     TIRED_AT: TIRED_AT,
     NEW_TACTIC_GAP: NEW_TACTIC_GAP,

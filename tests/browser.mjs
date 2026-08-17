@@ -915,7 +915,72 @@ await test('포지션을 모르면 전술 대신 무엇을 고칠지 말하고, 
   await page.close();
 });
 
-// ── 14. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 14. 맞춤 전술이 실제로 상대에 맞춰지는가 ──────────────────────────────
+/*
+ * 「맞춤 전술이 약하다」의 원인은 엔진이 아니라 입력이었다. 성향을 슬라이더
+ * 여덟 개로 받는데 아무도 매 경기 여덟 개를 맞추지 않는다. 기본값 그대로면
+ * 팀 지시 축이 **하나도** 안 밀려서 맞춤 전술의 지시가 기본 전술과 똑같아진다.
+ * 그런데 화면에는 「맞춤 전술」이라고 적혀 있으니 맞춰진 줄 안다.
+ */
+await test('상대 유형을 안 고르면 그렇다고 말하고, 고르면 지시가 실제로 바뀐다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  await withPositions(page);
+
+  // 아무것도 안 넣은 상태 — 조용히 넘어가면 안 된다
+  await tab(page, '맞춤 전술');
+  await page.waitForTimeout(1800);
+  const before = await page.locator('#tab-result').innerText();
+  assert.ok(/기본 전술」과 같습니다/.test(before),
+    `상대 정보가 없는데 아무 말도 안 한다: ${before.slice(0, 300)}`);
+
+  // 상대 유형을 하나 고른다
+  await page.locator('#tab-result button', { hasText: '상대 유형 고르러 가기' }).first().click();
+  await page.waitForTimeout(900);
+  const preset = page.locator('#tab-opp .card').filter({ hasText: '상대는 어떤 팀인가' }).first();
+  assert.equal(await preset.count(), 1, '상대 유형 카드가 없다');
+  await preset.locator('.rep').filter({ hasText: '깊은 블록' }).first().click();
+  await page.waitForTimeout(1200);
+
+  await tab(page, '맞춤 전술');
+  await page.waitForTimeout(1800);
+  const after = await page.locator('#tab-result').innerText();
+  assert.ok(!/기본 전술」과 같습니다/.test(after), '상대 유형을 골랐는데 아직 안 바뀌었다');
+
+  // 실제로 지시가 몇 개나 움직였는지 엔진 쪽에서 확인한다
+  const moved = await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    const r = window.FM_ENGINE.generate({
+      players: d.players, opponent: d.opponent, context: d.context
+    });
+    return Object.values(r.instructions.axes).filter((a) => a.shifted).length;
+  });
+  assert.ok(moved >= 4, `상대 유형을 골랐는데 지시가 ${moved}개만 움직였다`);
+
+  // 상대가 바뀌면 답도 달라져야 한다
+  const answers = await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    const out = new Set();
+    for (const p of window.FM_TACTIC_DATA.OPP_PRESETS) {
+      const r = window.FM_ENGINE.generate({
+        players: d.players, opponent: { ...d.opponent, ...p.set }, context: d.context
+      });
+      out.add(Object.values(r.instructions.axes).map((a) => a.index).join(',')
+        + '|' + r.xi.lineup.map((l) => l.role.abbr + l.duty).join(''));
+    }
+    return out.size;
+  });
+  assert.ok(answers >= 5, `상대 유형 일곱 개인데 서로 다른 답이 ${answers}가지뿐이다`);
+
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 15. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });
