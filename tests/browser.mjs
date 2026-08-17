@@ -1055,7 +1055,74 @@ await test('컨디션이 글자로 와도 값이 들어오고, 대략값이라�
   await page.close();
 });
 
-// ── 16. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 16. 일정표로 시즌을 통째로 넣는다 ─────────────────────────────────────
+/*
+ * 경기를 넣는 길이 한 건씩 손으로 저장하는 것 하나뿐이었다. 이미 시즌을 치르는
+ * 중인 사람에게 「네 경기가 쌓여야 판정합니다」라고 하는 건 그 사람이 이미 가진
+ * 정보를 안 쓰겠다는 소리다. FM 일정 화면에 그 시즌 전 경기가 다 들어 있다.
+ */
+await test('일정표를 넣으면 시즌 성적이 한 번에 들어오고, 점수만으로도 판정한다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await tab(page, '경기 후');
+  await page.waitForTimeout(700);
+
+  // 경기가 없을 때도 넣을 길이 보여야 한다 — 안 보이면 아무도 못 찾는다
+  const empty = await page.locator('#tab-review').innerText();
+  assert.ok(/일정표에서 시즌 전체 가져오기/.test(empty), '빈 화면에 일정표 가져오기가 없다');
+
+  await page.locator('#tab-review input[type=file]').first().setInputFiles([{
+    name: 'ko-fixtures.html', mimeType: 'text/html', buffer: fx('ko-fixtures.html')
+  }]);
+  await page.waitForTimeout(1500);
+
+  const card = page.locator('#tab-review details.card').filter({ hasText: '일정표에서 시즌 전체 가져오기' }).first();
+  const listed = await card.innerText();
+  assert.ok(/맨체스터 시티/.test(listed), `일정표를 못 읽었다: ${listed.slice(0, 300)}`);
+  // 친선 경기는 기본으로 꺼져 있어야 한다 — 프리시즌 3-0이 섞이면 성적이 무뎌진다
+  const checked = await card.locator('input[type=checkbox]:checked').count();
+  const boxes = await card.locator('input[type=checkbox]').count();
+  assert.equal(boxes, 12, `치른 경기 12개인데 ${boxes}개가 나왔다`);
+  assert.equal(checked, 6, `공식경기 6개만 켜져 있어야 하는데 ${checked}개가 켜져 있다`);
+
+  await card.locator('button', { hasText: '경기 넣기' }).click();
+  await page.waitForTimeout(1600);
+
+  const st = await stored(page);
+  assert.equal(st.matches.length, 6, `6경기가 들어와야 하는데 ${st.matches.length}경기다`);
+  // 점수 방향 — 뒤집히면 승패가 통째로 반대가 된다
+  const chelsea = st.matches.find((m) => /첼시/.test(m.opp));
+  assert.equal(chelsea.gf, 1, '홈 첼시전 1:0 승리를 뒤집어 읽었다');
+  assert.equal(chelsea.ga, 0);
+  assert.equal(chelsea.venue, 'home');
+  const city = st.matches.find((m) => /맨체스터 시티/.test(m.opp));
+  assert.equal(city.gf, 0, '원정 맨시티전 0:4 패배를 뒤집어 읽었다');
+  assert.equal(city.ga, 4);
+
+  // 그리고 실제로 판정이 나와야 한다 — 기대 득점이 없어도
+  const txt = await page.locator('#tab-review').innerText();
+  assert.ok(/1승 0무 5패/.test(txt), `전적이 안 맞는다: ${txt.slice(0, 300)}`);
+  assert.ok(/경기당 0\.33골/.test(txt), `6경기 2골인데 아무 말도 안 한다: ${txt.slice(0, 600)}`);
+  // 기대 득점 없이 원인을 단정하면 안 된다
+  assert.ok(/구분할 수 없습니다/.test(txt), '기대 득점 없이 형태인지 마무리인지 단정했다');
+
+  // 같은 파일을 또 넣어도 두 번 세지 않는다 — 두 번 세면 누적 판정이 통째로 틀어진다
+  await page.locator('#tab-review input[type=file]').first().setInputFiles([{
+    name: 'ko-fixtures.html', mimeType: 'text/html', buffer: fx('ko-fixtures.html')
+  }]);
+  await page.waitForTimeout(1500);
+  const card2 = page.locator('#tab-review details.card').filter({ hasText: '일정표에서 시즌 전체 가져오기' }).first();
+  assert.equal(await card2.locator('input[type=checkbox]:checked').count(), 0,
+    '이미 저장한 경기가 또 켜져 있다');
+  assert.ok(/이미 저장됨/.test(await card2.innerText()), '중복이라고 말하지 않는다');
+  assert.equal((await stored(page)).matches.length, 6, '중복 저장으로 경기가 늘었다');
+
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 17. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });

@@ -1042,6 +1042,124 @@
   }
 
   /*
+   * ── 일정표 읽기 ─────────────────────────────────────────────────────────
+   *
+   * 「경기 후」 탭은 경기가 쌓여야 판정하는데, 지금까지 경기를 넣는 길이 하나뿐이
+   * 었습니다 — 경기가 끝날 때마다 「경기 중」 탭에서 한 건씩 저장. 그 말은
+   * 도구를 쓰기 시작한 날 이전의 시즌은 통째로 없는 것이 된다는 뜻입니다.
+   * 시즌 절반을 치르고 온 사람에게 "네 경기가 쌓여야 말할 수 있습니다"라고 하는 건
+   * 그 사람이 이미 가진 정보를 안 쓰겠다는 소리입니다.
+   *
+   * FM 일정 화면에는 그 시즌 전 경기의 상대·장소·점수가 다 있습니다. 그걸 읽습니다.
+   * 기대 득점은 없지만 승점과 득실은 있고, 상대 전력별 판정은 그것만으로 돕니다.
+   *
+   * 점수는 우리 팀이 먼저 나옵니다 — 원정이어도 그렇습니다(첼시 홈 1-0 승,
+   * 맨시티 원정 0-4 패로 확인). 이걸 뒤집어 읽으면 승패가 통째로 반대가 됩니다.
+   */
+  var FIXTURE_COLS = {
+    date: ['일시', '날짜', 'date'],
+    opp: ['상대팀', '상대', 'opposition', 'opponent', 'opp'],
+    venue: ['장소', 'venue', 'ha'],
+    result: ['성적', '결과', '스코어', '점수', 'result', 'score'],
+    comp: ['대회', 'competition', 'comp']
+  };
+
+  function fixtureHeaderMap(row) {
+    var map = {}, hits = 0;
+    row.forEach(function (cell, j) {
+      var n = norm(cell);
+      if (!n) return;
+      Object.keys(FIXTURE_COLS).forEach(function (field) {
+        if (map[field] !== undefined) return;
+        if (FIXTURE_COLS[field].indexOf(n) >= 0) { map[field] = j; hits++; }
+      });
+    });
+    return { map: map, hits: hits };
+  }
+
+  /*
+   * 장소는 '홈 / 원 / 중'입니다. 중립 경기는 홈으로도 원정으로도 세면 안 됩니다 —
+   * 슈퍼컵을 홈 경기로 세면 홈 성적이 실제보다 나빠 보입니다.
+   */
+  function fixtureVenue(raw) {
+    var n = norm(raw);
+    if (!n) return null;
+    if (n === '홈' || n === 'h' || n === 'home') return 'home';
+    if (n === '원' || n === '원정' || n === 'a' || n === 'away') return 'away';
+    if (n === '중' || n === '중립' || n === 'n' || n === 'neutral') return 'neutral';
+    return null;
+  }
+
+  /*
+   * 성적 칸. 'p 1 - 1'은 승부차기, 'a 2 - 1'은 연장입니다. 앞 글자는 떼고 점수만
+   * 읽되 승부차기였다는 것은 남깁니다 — 정규 시간 무승부를 승리로 세면 안 됩니다.
+   */
+  function fixtureScore(raw) {
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s) return null;
+    var pens = /^p\b|^승부차기|pens/i.test(s);
+    var aet = /^a\b|^연장|aet/i.test(s);
+    var m = s.match(/(\d+)\s*[-–—:]\s*(\d+)/);
+    if (!m) return null;
+    return { gf: parseInt(m[1], 10), ga: parseInt(m[2], 10), pens: pens, aet: aet };
+  }
+
+  var FRIENDLY = /친선|friendly|pre-?season/i;
+
+  function parseFixtures(text) {
+    var det = detectAndParse(text);
+    var rows = det.rows || [];
+    var head = null;
+    for (var i = 0; i < rows.length && i < 12; i++) {
+      var got = fixtureHeaderMap(rows[i]);
+      // 상대·성적·장소가 다 있어야 경기 기록으로 쓸 수 있습니다.
+      if (got.hits >= 3 && got.map.result !== undefined && got.map.opp !== undefined) {
+        head = { index: i, map: got.map };
+        break;
+      }
+    }
+    if (!head) {
+      return {
+        matches: [], format: det.format, rows: rows.length,
+        error: '일정표로 읽지 못했습니다. FM 「일정」 화면에서 상대 팀 · 장소 · 성적 열이 보이는 상태로 내보냈는지 확인하세요.'
+      };
+    }
+
+    var out = [], future = 0, noScore = 0;
+    for (var r = head.index + 1; r < rows.length; r++) {
+      var row = rows[r];
+      var cell = function (f) {
+        var j = head.map[f];
+        return j === undefined ? '' : String(row[j] == null ? '' : row[j]).trim();
+      };
+      var opp = cell('opp');
+      var score = fixtureScore(cell('result'));
+      /*
+       * 월 구분 줄('2023년 8월')과 아직 안 치른 경기가 섞여 옵니다. 둘 다 성적이
+       * 비어 있는데, 안 치른 경기를 0:0으로 세면 시즌 성적이 통째로 망가집니다.
+       */
+      if (!score) {
+        if (opp) { future++; noScore++; }
+        continue;
+      }
+      out.push({
+        date: cell('date'), opp: opp, comp: cell('comp'),
+        venue: fixtureVenue(cell('venue')),
+        gf: score.gf, ga: score.ga, pens: score.pens, aet: score.aet,
+        friendly: FRIENDLY.test(cell('comp'))
+      });
+    }
+
+    return {
+      matches: out, format: det.format, rows: rows.length,
+      played: out.length, future: future,
+      friendly: out.filter(function (m) { return m.friendly; }).length,
+      noVenue: out.filter(function (m) { return !m.venue; }).length,
+      noName: out.filter(function (m) { return !m.opp; }).length
+    };
+  }
+
+  /*
    * 지금 스쿼드에 있는데 이번에 가져온 파일에는 없는 선수.
    * 방출·임대로 빠진 선수를 찾는 데 씁니다. 자동으로 지우지는 않습니다 —
    * 능력치 묶음별로 나눠 내보낸 파일 하나만 넣어도 나머지가 전부 '없는 선수'가
@@ -1068,6 +1186,9 @@
     parsePositions: parsePositions,
     parseAttrValue: parseAttrValue,
     parsePercent: parsePercent,
+    parseFixtures: parseFixtures,
+    fixtureScore: fixtureScore,
+    fixtureVenue: fixtureVenue,
     conditionFromWord: conditionFromWord,
     CONDITION_WORDS: CONDITION_WORDS,
     parseFoot: parseFoot,

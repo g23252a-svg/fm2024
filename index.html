@@ -4168,6 +4168,158 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
   }
 
   /*
+   * ── 일정표에서 시즌 전체 가져오기 ───────────────────────────────────────
+   *
+   * 경기를 넣는 길이 하나뿐이었습니다 — 경기가 끝날 때마다 한 건씩 저장.
+   * 그러면 도구를 쓰기 시작한 날 이전의 시즌은 통째로 없는 것이 됩니다.
+   * 이미 열 경기를 치른 사람에게 "네 경기가 쌓여야 판정합니다"라고 하는 건
+   * 그 사람이 가진 정보를 안 쓰겠다는 소리입니다.
+   *
+   * FM 「일정」 화면에는 그 시즌 전 경기의 상대 · 장소 · 점수가 다 있습니다.
+   * 기대 득점은 없지만 승점과 득실은 있고, 상대 전력별 판정은 그것만으로 돕니다.
+   */
+  var FIX_TIERS = [['', '모름'], ['weaker', '약체'], ['even', '비슷'], ['stronger', '강팀']];
+
+  function fixtureSig(m) {
+    return (m.opp || '').trim() + '|' + m.venue + '|' + m.gf + ':' + m.ga;
+  }
+
+  function fixtureImportCard() {
+    var F = S._fixtures;
+    var card = rememberOpen('fixImport', h('details', { class: 'card' }));
+    card.appendChild(h('summary', { style: 'cursor:pointer' }, [
+      h('span', { style: 'font-size:15px;font-weight:800', text: '일정표에서 시즌 전체 가져오기' }),
+      h('span', { class: 'tiny muted', text: F ? '  ' + F.matches.length + '경기 읽음' : '  한 번에 넣기' })
+    ]));
+    card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px' }, [
+      'FM ', h('b', { style: 'color:var(--text)', text: '「일정」 화면' }),
+      '을 내보내면 그 시즌 치른 경기를 한 번에 읽습니다 — 한 경기씩 손으로 넣지 않아도 됩니다. ',
+      h('b', { style: 'color:var(--text)', text: '기대 득점은 일정표에 없습니다' }),
+      ' — 승점·득실로 보는 판정(상대 전력별 · 홈/원정)은 나오고, 마무리 판정은 안 나옵니다.'
+    ]));
+
+    card.appendChild(h('div', { class: 'row', style: 'margin-top:8px' }, [
+      filePicker('일정 파일 넣기', function (files) {
+        readFiles(files, function (items) {
+          var got = null, err = null;
+          items.forEach(function (it) {
+            if (got || !it.text) return;
+            var r = IMP.parseFixtures(it.text);
+            if (r.error) { err = r.error; return; }
+            got = r;
+          });
+          if (!got) { toast(err || '일정표를 읽지 못했습니다.'); return; }
+          if (!got.matches.length) { toast('아직 치른 경기가 없습니다.'); return; }
+          /*
+           * 친선 경기는 기본으로 꺼 둡니다. 프리시즌 3-0 승리가 섞이면 시즌
+           * 성적이 실제보다 좋아 보이는데, 그건 판정을 통째로 무르게 만듭니다.
+           */
+          S._fixtures = {
+            matches: got.matches,
+            future: got.future,
+            pick: got.matches.map(function (m) { return !m.friendly; }),
+            tier: got.matches.map(function () { return ''; })
+          };
+          /*
+           * 카드를 열어 둡니다. 접힌 채로 두면 파일을 골랐는데 화면이 그대로라
+           * 아무 일도 안 일어난 것처럼 보입니다 — 브라우저 검사가 이걸 잡았습니다.
+           */
+          S._open.fixImport = true;
+          // _fixtures 자체는 저장하지 않습니다 — 넣기 전의 임시 상태라 새로고침하면
+          // 사라지는 것이 맞습니다. 넣고 나면 S.matches에 들어가 저장됩니다.
+          render();
+        });
+      })
+    ]));
+
+    if (!F) return card;
+
+    // 이미 저장한 경기는 다시 넣지 않습니다 — 두 번 세면 누적 판정이 통째로 틀어집니다.
+    var have = {};
+    (S.matches || []).forEach(function (g) { have[fixtureSig(g)] = 1; });
+
+    var rows = h('div', { style: 'margin-top:9px' });
+    F.matches.forEach(function (m, i) {
+      var dup = !!have[fixtureSig(m)];
+      if (dup) F.pick[i] = false;
+      var res = m.gf > m.ga ? '승' : m.gf === m.ga ? '무' : '패';
+      var col = m.gf > m.ga ? 'var(--acc)' : m.gf === m.ga ? 'var(--dim)' : 'var(--danger)';
+      rows.appendChild(h('div', {
+        style: 'display:flex;gap:7px;align-items:center;flex-wrap:wrap;padding:5px 0;'
+          + 'border-bottom:1px solid var(--line);font-size:12.5px'
+          + (dup ? ';opacity:.45' : '')
+      }, [
+        h('input', {
+          type: 'checkbox', checked: F.pick[i] ? 'checked' : null, disabled: dup ? 'disabled' : null,
+          'aria-label': (m.opp || '상대 모름') + ' 포함',
+          onchange: function (e) { F.pick[i] = e.target.checked; }
+        }),
+        h('span', { style: 'flex:0 0 auto;color:var(--dim2);min-width:34px',
+          text: m.venue === 'home' ? '홈' : m.venue === 'away' ? '원정' : m.venue === 'neutral' ? '중립' : '—' }),
+        h('span', {
+          style: 'flex:1 1 90px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis',
+          text: m.opp || '(상대 이름 없음)'
+        }),
+        h('b', { style: 'flex:0 0 auto;color:' + col, text: m.gf + ':' + m.ga + ' ' + res }),
+        m.pens ? h('span', { class: 'tiny muted', text: '승부차기' }) : null,
+        m.friendly ? h('span', { class: 'tiny muted', text: '친선' }) : null,
+        dup ? h('span', { class: 'tiny muted', text: '이미 저장됨' })
+          : h('span', { style: 'flex:0 0 auto' }, [
+            segment(FIX_TIERS, F.tier[i], function (v) { F.tier[i] = v; render(); })
+          ])
+      ]));
+    });
+    card.appendChild(rows);
+
+    var picked = F.pick.filter(Boolean).length;
+    var noTier = F.matches.filter(function (m, i) { return F.pick[i] && !F.tier[i]; }).length;
+
+    /*
+     * 상대 전력은 능력치에서 나오지 않습니다. 안 고르면 상대별 판정이 안 나오므로
+     * 그 사실을 여기서 말합니다 — 넣고 나서 "왜 아무 말도 없지"가 되면 안 됩니다.
+     */
+    card.appendChild(h('div', { class: 'tiny', style: 'margin-top:8px;color:' + (noTier ? 'var(--warn)' : 'var(--dim)'),
+      text: noTier
+        ? '고른 ' + picked + '경기 중 ' + noTier + '경기에 상대 전력이 없습니다 — 그만큼은 상대별 판정에서 빠집니다. 약체 상대 성적과 강팀 상대 성적은 처방이 정반대라 이게 판정을 가릅니다.'
+        : '고른 ' + picked + '경기 전부 상대 전력이 있습니다.' }));
+    if (F.future) {
+      card.appendChild(h('div', { class: 'tiny muted', text: '아직 안 치른 경기 ' + F.future + '개는 뺐습니다.' }));
+    }
+
+    card.appendChild(h('div', { class: 'row', style: 'margin-top:9px' }, [
+      h('button', {
+        class: 'btn pri', disabled: picked ? null : 'disabled',
+        onclick: function () {
+          var add = [];
+          F.matches.forEach(function (m, i) {
+            if (!F.pick[i]) return;
+            add.push({
+              id: 'f' + Date.now() + '_' + i, _sig: fixtureSig(m),
+              opp: (m.opp || '').trim(), venue: m.venue || null,
+              gf: m.gf, ga: m.ga,
+              oppLevel: F.tier[i] || null,
+              flags: [],
+              // 일정표에는 기록이 없습니다. 지어내지 않고 비워 둡니다.
+              us: null, them: null,
+              fromFixtures: true
+            });
+          });
+          if (!add.length) return;
+          S.matches = (S.matches || []).concat(add);
+          S._fixtures = null;
+          save(); render(); window.scrollTo(0, 0);
+          toast(add.length + '경기를 넣었습니다.');
+        }
+      }, [picked ? picked + '경기 넣기' : '고른 경기 없음']),
+      h('button', {
+        class: 'btn sm ghost',
+        onclick: function () { S._fixtures = null; render(); }
+      }, ['취소'])
+    ]));
+    return card;
+  }
+
+  /*
    * ── 경기 후 탭 ──────────────────────────────────────────────────────────
    *
    * 「경기 중」이 한 경기 안에서 무엇을 건드릴지를 말한다면, 여기는 여러 경기를
@@ -4202,13 +4354,14 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       root.appendChild(h('div', { class: 'card' }, [
         h('div', { class: 'empty' }, [
           h('b', { text: '저장한 경기가 없습니다' }),
-          '「경기 중」 탭에서 점수와 기록을 넣고 맨 아래 「이 경기 기록으로 저장」을 누르면 여기에 쌓입니다. '
-          + '한 경기로는 운과 실력을 가를 수 없어서, 이 화면은 몇 경기가 모여야 답을 냅니다.'
+          '이미 시즌을 치르는 중이면 ', h('b', { style: 'color:var(--text)', text: 'FM 「일정」 화면을 내보내 아래에서 한 번에 넣으세요' }),
+          ' — 한 경기씩 손으로 넣을 필요가 없습니다. 앞으로 치르는 경기는 「경기 중」 탭에서 기록까지 함께 저장하면 마무리 판정도 나옵니다.'
         ]),
         h('div', { class: 'row', style: 'justify-content:center' }, [
-          h('button', { class: 'btn pri', onclick: function () { S.tab = 'match'; render(); } }, ['경기 중으로 이동'])
+          h('button', { class: 'btn', onclick: function () { S.tab = 'match'; render(); } }, ['경기 중으로 이동'])
         ])
       ]));
+      root.appendChild(fixtureImportCard());
       return;
     }
 
@@ -4364,6 +4517,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       }, ['전부 지우기'])
     ]));
     root.appendChild(lc);
+    root.appendChild(fixtureImportCard());
   };
 
   var KIND_KO = { hold: '그대로', axis: '지시', toggle: '지시', shape: '형태', sub: '교체' };

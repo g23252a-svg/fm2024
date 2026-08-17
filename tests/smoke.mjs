@@ -3290,6 +3290,104 @@ function run(opponent = {}, context = {}, players = squad) {
   }
 }
 
+// ── 일정표에서 시즌 전체를 읽는다 ─────────────────────────────────────────
+/*
+ * 경기를 넣는 길이 한 건씩 손으로 저장하는 것 하나뿐이었다. 그러면 도구를 쓰기
+ * 시작한 날 이전의 시즌은 통째로 없는 것이 된다 — 이미 열 경기를 치른 사람에게
+ * "네 경기가 쌓여야 판정합니다"라고 하는 건 그 사람이 가진 정보를 안 쓰겠다는 소리다.
+ *
+ * 여기서 제일 위험한 것은 점수를 거꾸로 읽는 것이다. FM 일정표는 원정이어도
+ * 우리 점수를 먼저 적는다. 뒤집어 읽으면 승패가 통째로 반대가 된다.
+ */
+{
+  const fxRow = (date, opp, venue, result, comp) =>
+    `<tr><td>${date}</td><td>15:00</td><td>${opp}</td><td>false</td><td>${venue}</td><td></td><td>${result}</td><td>${comp}</td></tr>`;
+  const fxTable = (rows) => `<html><body><table>
+    <tr><th>일시</th><th>시간</th><th>상대 팀</th><th>TV</th><th>장소</th><th></th><th>성적</th><th>대회</th></tr>
+    ${rows.join('')}</table></body></html>`;
+
+  const fx = IMP.parseFixtures(fxTable([
+    // 월 구분 줄 — 첫 칸만 차 있고 나머지는 비어 있다. 경기로 세면 안 된다.
+    '<tr><td>2023년 8월</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>',
+    fxRow('토, 2023/8/19', '맨체스터 시티 FC', '원', '0 - 4', 'Premier League'),
+    fxRow('토, 2023/8/26', '첼시', '홈', '1 - 0', 'Premier League'),
+    fxRow('수, 2023/8/16', '파리 생제르맹', '중', '0 - 3', 'UEFA Super Cup'),
+    fxRow('수, 2023/7/26', '알코르콘', '홈', 'p 1 - 1', '친선 컵대회 준결승전'),
+    fxRow('토, 2023/7/8', '셀틱', '원', '1 - 1', '친선 경기'),
+    // 아직 안 치른 경기 — 성적이 비어 있다. 0:0으로 세면 시즌이 통째로 망가진다.
+    fxRow('토, 2023/9/30', 'Newcastle Utd', '원', '', 'Premier League')
+  ]));
+
+  assert.ok(!fx.error, `일정표를 못 읽었다: ${fx.error}`);
+  assert.equal(fx.played, 5, '치른 경기 수가 안 맞는다');
+  assert.equal(fx.future, 1, '안 치른 경기를 안 세거나 경기로 셌다');
+  assert.equal(fx.friendly, 2, '친선 경기를 못 가렸다');
+
+  const byOpp = Object.fromEntries(fx.matches.map((m) => [m.opp, m]));
+  // 점수 방향 — 여기가 뒤집히면 승패가 통째로 반대가 된다
+  assert.equal(byOpp['맨체스터 시티 FC'].gf, 0, '원정 경기의 우리 점수를 뒤집어 읽었다');
+  assert.equal(byOpp['맨체스터 시티 FC'].ga, 4, '원정 경기의 상대 점수를 뒤집어 읽었다');
+  assert.equal(byOpp['첼시'].gf, 1, '홈 경기 점수를 뒤집어 읽었다');
+  assert.equal(byOpp['첼시'].venue, 'home');
+  assert.equal(byOpp['맨체스터 시티 FC'].venue, 'away');
+  // 중립 경기를 홈으로 세면 홈 성적이 실제보다 나빠 보인다
+  assert.equal(byOpp['파리 생제르맹'].venue, 'neutral', '중립 경기를 홈/원정으로 읽었다');
+  assert.equal(byOpp['알코르콘'].pens, true, '승부차기 표시를 못 읽었다');
+  assert.equal(byOpp['알코르콘'].gf, 1, '승부차기 표기에서 점수를 못 뽑았다');
+  assert.equal(byOpp['셀틱'].friendly, true);
+  assert.equal(byOpp['첼시'].friendly, false);
+
+  // 일정표가 아닌 파일을 넣으면 지어내지 않고 못 읽었다고 한다
+  const notFx = IMP.parseFixtures('<html><body><table><tr><th>이름</th><th>나이</th></tr><tr><td>손흥민</td><td>31</td></tr></table></body></html>');
+  assert.ok(notFx.error, '일정표가 아닌데 일정표로 읽었다');
+  assert.equal(notFx.matches.length, 0);
+
+  // 점수만 있어도 판정이 나와야 한다 — 일정표에는 기대 득점이 없다
+  const scoreOnly = [
+    { id: 'a', opp: '웨스트햄', venue: 'home', gf: 0, ga: 1, oppLevel: 'even', flags: [], us: null, them: null },
+    { id: 'b', opp: '맨시티', venue: 'away', gf: 0, ga: 4, oppLevel: 'stronger', flags: [], us: null, them: null },
+    { id: 'c', opp: '첼시', venue: 'home', gf: 1, ga: 0, oppLevel: 'even', flags: [], us: null, them: null },
+    { id: 'd', opp: '번리', venue: 'away', gf: 0, ga: 1, oppLevel: 'weaker', flags: [], us: null, them: null },
+    { id: 'e', opp: '리버풀', venue: 'away', gf: 1, ga: 2, oppLevel: 'stronger', flags: [], us: null, them: null },
+    { id: 'f', opp: '아스날', venue: 'away', gf: 0, ga: 3, oppLevel: 'stronger', flags: [], us: null, them: null }
+  ];
+  const rvScore = E.matchReview(scoreOnly, null);
+  assert.equal(rvScore.record.gf, 2, '득점 합계가 안 맞는다');
+  const kinds = rvScore.findings.map((f) => f.kind);
+  assert.ok(kinds.includes('goal-drought'), `6경기 2골인데 아무 말도 안 한다: ${kinds.join(', ')}`);
+  assert.ok(kinds.includes('concede-heavy'), `6경기 11실점인데 아무 말도 안 한다: ${kinds.join(', ')}`);
+  // 기대 득점 없이 형태와 마무리를 가르면 안 된다 — 그건 이 데이터로 알 수 없다
+  const drought = rvScore.findings.find((f) => f.kind === 'goal-drought');
+  assert.ok(/구분할 수 없습니다/.test(drought.fix), '기대 득점 없이 원인을 단정했다');
+  assert.ok(!kinds.includes('finishing-bad'), '기대 득점이 없는데 마무리를 판정했다');
+
+  // 잘 넣고 잘 막는 시즌에는 조용해야 한다 (문턱이 아무 데서나 터지면 못 믿는다)
+  const good = scoreOnly.map((m, i) => ({ ...m, id: 'g' + i, gf: 2, ga: 1 }));
+  const rvGood = E.matchReview(good, null);
+  const goodKinds = rvGood.findings.map((f) => f.kind);
+  assert.ok(!goodKinds.includes('goal-drought'), '경기당 2골인데 득점 가뭄이라고 한다');
+  assert.ok(!goodKinds.includes('concede-heavy'), '경기당 1실점인데 실점이 많다고 한다');
+
+  // 표본이 모자라면 말하지 않는다
+  const few = scoreOnly.slice(0, 4);
+  assert.ok(!E.matchReview(few, null).findings.map((f) => f.kind).includes('goal-drought'),
+    '4경기로 득점 가뭄을 판정했다');
+
+  // 원정에서만 무너지는 것과 홈에서만 못하는 것은 처방이 정반대다 — 둘 다 봐야 한다
+  const awayBad = [];
+  for (let i = 0; i < 4; i++) awayBad.push({ id: 'h' + i, opp: 'H' + i, venue: 'home', gf: 2, ga: 0, flags: [], us: null, them: null });
+  for (let i = 0; i < 4; i++) awayBad.push({ id: 'a' + i, opp: 'A' + i, venue: 'away', gf: 0, ga: 2, flags: [], us: null, them: null });
+  const rvAway = E.matchReview(awayBad, null);
+  assert.ok(rvAway.findings.map((f) => f.kind).includes('away-collapse'),
+    '홈 3.0점 원정 0점인데 원정 붕괴를 못 잡는다');
+  // 반대 방향은 반대 판정이 나와야 한다 (같은 판정이 양쪽에 나오면 못 믿는다)
+  const homeBad = awayBad.map((m) => ({ ...m, venue: m.venue === 'home' ? 'away' : 'home' }));
+  const rvHome = E.matchReview(homeBad, null);
+  const homeKinds = rvHome.findings.map((f) => f.kind);
+  assert.ok(homeKinds.includes('home-worse'), '홈에서 못하는 것을 못 잡는다');
+  assert.ok(!homeKinds.includes('away-collapse'), '홈이 나쁜데 원정 붕괴라고도 한다');
+}
+
 // ── 컨디션이 글자로 와도 읽는다 ───────────────────────────────────────────
 /*
  * FM은 환경설정에 따라 컨디션을 '94%'로도 '괜찮음'으로도 내보낸다. 글자로
