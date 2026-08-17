@@ -287,6 +287,20 @@ for (const [label, opts] of CASES) {
       checkSetPieces(tag, base.xi);
       checkTraining(`훈련/${label}/${standing}`, squad, standing);
       checkRotation(`로테/${label}/${standing}`, squad, standing, base);
+      /*
+       * 포지션 추정은 사람이 확인하는 값이지만, 없는 포지션을 내놓거나
+       * 터지면 화면이 죽습니다. 어떤 스쿼드에서도 안전해야 합니다.
+       */
+      for (const p of squad.slice(0, 6)) {
+        let g;
+        try { g = E.guessPositions(p, squad); } catch (e) { fail(`추정/${label}`, 'throw ' + e.message); break; }
+        if (!g) { fail(`추정/${label}`, '결과가 없다'); break; }
+        if (g.picks.length > 2) fail(`추정/${label}`, `${g.picks.length}개나 추정했다`);
+        for (const id of g.picks) {
+          if (!POS.includes(id)) fail(`추정/${label}`, `없는 포지션 ${id}`);
+        }
+        checkStrings(`추정/${label}`, g.why);
+      }
     }
 
     for (const f of FD.FORMATIONS) {

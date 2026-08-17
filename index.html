@@ -1031,6 +1031,10 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     var bulk = bulkTraitCard();
     if (bulk) root.appendChild(bulk);
 
+    // 포지션이 비면 전술 자체가 안 나오므로 가장 위에 둡니다.
+    var posCard = bulkPositionCard();
+    if (posCard) root.appendChild(posCard);
+
     var fit = bulkFitnessCard();
     if (fit) root.appendChild(fit);
 
@@ -1237,6 +1241,105 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    * 읽히게 해 두고, 여기는 그게 안 될 때 쓰는 보조 수단으로 둡니다 —
    * 선발과 그 대체 자원만 넣어도 로테이션은 나옵니다.
    */
+  /*
+   * ── 포지션 한 번에 고르기 ───────────────────────────────────────────────
+   *
+   * 이 도구가 쓸모없어지는 가장 흔한 이유가 포지션이 비어 있는 것입니다.
+   * 스쿼드 보기에 「포지션」 열을 안 넣고 내보내면 그렇게 되는데, 그걸 고치려면
+   * 원래는 다시 내보내거나 선수마다 편집 창을 스물네 번 열어야 했습니다.
+   *
+   * 여기서 한 화면에 끝냅니다. 능력치로 추정한 자리를 미리 켜 두되, **추정은
+   * 추정이라고 적습니다** — 대략 셋 중 둘이 맞고 나머지는 옆줄입니다. 사람이
+   * 훑으면서 틀린 것만 고치면 됩니다.
+   */
+  function bulkPositionCard() {
+    if (!S.players.length) return null;
+    var missing = S.players.filter(function (p) { return !(p.positions || []).length; });
+
+    var card = rememberOpen('bulkPos', h('details', { class: 'card' }));
+    card.appendChild(h('summary', { style: 'cursor:pointer' }, [
+      h('span', { style: 'font-size:15px;font-weight:800', text: '포지션 한 번에 고르기' }),
+      h('span', {
+        class: 'tiny', style: 'font-weight:800;color:' + (missing.length ? 'var(--danger)' : 'var(--acc)'),
+        text: '  ' + (S.players.length - missing.length) + '/' + S.players.length + '명 지정됨'
+      })
+    ]));
+    card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px' }, [
+      h('b', { style: 'color:var(--text)', text: '포지션이 비면 이 도구는 전술을 못 냅니다' }),
+      ' — 모든 선수가 「낯선 자리」로 계산되어 선발이 사실상 능력치 총합 순서가 되기 때문입니다. ',
+      'FM 스쿼드 보기에 「포지션」 열을 넣어 다시 내보내는 쪽이 가장 정확하고, 그게 번거로우면 여기서 고르세요.'
+    ]));
+
+    var only = S._posOnlyMissing !== false;
+    var rows = only ? missing : S.players;
+
+    card.appendChild(h('div', { class: 'row', style: 'margin:2px 0 10px' }, [
+      segment([[true, '아직 안 넣은 선수만'], [false, '전원']], only, function (v) {
+        S._posOnlyMissing = v; render();
+      }),
+      h('button', {
+        class: 'btn sm',
+        onclick: function () {
+          var n = 0;
+          S.players.forEach(function (p) {
+            if ((p.positions || []).length) return;
+            var g;
+            try { g = E.guessPositions(p, S.players); } catch (e) { return; }
+            if (!g || !g.picks.length) return;
+            p.positions = g.picks.slice();
+            p.posGuessed = true;      // 추정으로 채운 자리라는 표시
+            n++;
+          });
+          if (!n) { toast('추정할 수 있는 선수가 없습니다.'); return; }
+          save(); render();
+          toast(n + '명을 추정으로 채웠습니다. 반드시 훑어보고 틀린 것을 고치세요.');
+        }
+      }, ['빈 자리를 추정으로 채우기'])
+    ]));
+    card.appendChild(h('div', { class: 'tiny muted', style: 'margin-bottom:10px',
+      text: '추정은 실제 스쿼드로 재 봤을 때 셋 중 둘이 정확하고 나머지는 대개 한 줄 위아래입니다. '
+        + '좌우는 능력치로 알 수 없어 양쪽을 같이 켭니다 — 확인 없이 그대로 쓰지 마세요.' }));
+
+    if (!rows.length) {
+      card.appendChild(h('div', { class: 'rep' }, [h('b', { text: '전원 지정됐습니다. ' }), '이제 전술이 제대로 나옵니다.']));
+      return card;
+    }
+
+    rows.forEach(function (p) {
+      var g = null;
+      try { g = E.guessPositions(p, S.players); } catch (e) { g = null; }
+      var chips = h('div', { class: 'chips', style: 'margin-top:5px' });
+      RD.POSITIONS.forEach(function (pos) {
+        var on = (p.positions || []).indexOf(pos.id) >= 0;
+        var suggested = !on && g && g.picks.indexOf(pos.id) >= 0;
+        chips.appendChild(h('button', {
+          class: 'chip', 'aria-pressed': on ? 'true' : 'false',
+          style: suggested ? 'border-style:dashed;border-color:var(--acc2);color:var(--acc2)' : '',
+          title: suggested ? '추정 — 눌러서 확정하세요' : '',
+          onclick: function () {
+            var list = (p.positions || []).slice();
+            var i = list.indexOf(pos.id);
+            if (i >= 0) list.splice(i, 1); else list.push(pos.id);
+            p.positions = list;
+            // 사람이 직접 손대면 더 이상 추정이 아닙니다.
+            delete p.posGuessed;
+            S._baseCache = null; S._needsCache = null; S._trainCache = null;
+            save(); render();
+          }
+        }, [pos.ko]));
+      });
+      card.appendChild(h('div', { class: 'rep', style: 'margin-bottom:7px' }, [
+        h('div', { class: 'row', style: 'gap:7px;align-items:baseline' }, [
+          h('b', { text: p.name }),
+          p.posGuessed ? h('span', { class: 'tiny', style: 'color:var(--warn)', text: '추정' }) : null,
+          g && g.why ? h('span', { class: 'tiny muted', text: g.why }) : null
+        ]),
+        chips
+      ]));
+    });
+    return card;
+  }
+
   function bulkFitnessCard() {
     if (S.players.length < 3) return null;
     var known = S.players.filter(function (p) { return typeof p.cond === 'number'; }).length;
@@ -1964,6 +2067,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       return;
     }
 
+    var gateR = positionGate(res);
+    if (gateR) { root.appendChild(gateR); return; }
+
     // 어느 슬롯을 쓰는지, 그리고 왜.
     if (pick) {
       var pc = h('div', {
@@ -2064,22 +2170,6 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     var impact = injuryImpactCard(res);
     if (impact) root.appendChild(impact);
 
-    // 포지션이 비어 있으면 아래 결과 전체를 믿을 수 없으므로 맨 위에서 말합니다.
-    var noPos = res.xi.lineup.filter(function (l) {
-      return l.player && !(l.player.positions || []).length;
-    }).length;
-    if (noPos >= 3) {
-      root.appendChild(h('div', { class: 'card' }, [
-        h('div', { class: 'warn high' }, [
-          h('span', { class: 'ic', text: '!' }),
-          h('span', {}, [
-            h('b', { text: '선발 ' + noPos + '명의 등록 포지션을 모릅니다. ' }),
-            '아래 배치는 능력치만 보고 세운 것이라 실제로 쓸 수 없습니다. ',
-            'FM 보기에 ', h('b', { text: '포지션' }), ' 열을 넣어 다시 내보내거나, 스쿼드 탭에서 선수마다 포지션을 지정하세요.'
-          ])
-        ])
-      ]));
-    }
 
     // 경고
     if (res.warnings.length) root.appendChild(warningsCard(res.warnings));
@@ -2362,6 +2452,58 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    * 캐시 열쇠. 여기 안 들어간 값을 바꾸면 화면이 옛 결과를 그대로 보여 줍니다 —
    * 특성과 나이도 결과를 바꾸므로 반드시 들어가야 합니다.
    */
+  /*
+   * ── 포지션 없이는 전술을 내지 않습니다 ──────────────────────────────────
+   *
+   * 등록 포지션을 모르면 포지션 친숙도가 전원 0.34(낯선 자리)로 깔립니다. 그러면
+   * 선발이 사실상 "능력치 총합 순서"가 되어, 수비형 미드필더가 리베로에 서고
+   * 10번이 스트라이커로 나갑니다. 실제로 그렇게 나왔습니다 —
+   * 적합도가 열한 자리 모두 22~26이었고 골키퍼는 3이었습니다.
+   *
+   * 그런데 화면은 그걸 그대로 전술로 내놨습니다. 경고 한 줄을 위에 붙여 뒀지만
+   * 아래에 완성된 배치가 그려져 있으면 사람은 그걸 씁니다. 그리고 대패합니다.
+   *
+   * 「영입」 탭이 같은 이유로 이미 막혀 있습니다. 전술 쪽이 더 위험한데 안 막고
+   * 있었습니다 — 이제 여기서 막습니다.
+   */
+  var POS_GATE_MAX_UNKNOWN = 3;   // 선발 중 이만큼 모르면 배치를 믿을 수 없습니다
+
+  function positionGate(res) {
+    var unknown = res.xi.lineup.filter(function (l) {
+      return l.player && !(l.player.positions || []).length;
+    }).length;
+    if (unknown < POS_GATE_MAX_UNKNOWN) return null;
+
+    var total = S.players.length;
+    var withPos = S.players.filter(function (p) { return (p.positions || []).length; }).length;
+
+    var card = h('div', { class: 'card' }, [
+      h('div', { class: 'warn high' }, [
+        h('span', { class: 'ic', text: '!' }),
+        h('span', {}, [
+          h('b', { text: '포지션을 모르는 선수가 많아 전술을 내지 않습니다. ' }),
+          '선발 11명 중 ' + unknown + '명, 전체 ' + total + '명 중 ' + (total - withPos) + '명의 등록 포지션이 비어 있습니다.',
+          h('span', { class: 'fixnote', text:
+            '등록 포지션을 모르면 모든 선수가 「낯선 자리」로 계산됩니다. 그러면 선발이 사실상 능력치 총합 순서가 되어 '
+            + '수비형 미드필더가 센터백에 서고 10번이 스트라이커로 나갑니다. 그대로 게임에 옮기면 집니다 — '
+            + '그래서 틀린 배치를 그럴듯하게 내놓는 대신 여기서 멈춥니다.' })
+        ])
+      ]),
+      h('div', { class: 'desc', style: 'margin-top:10px' }, [
+        h('b', { style: 'color:var(--text)', text: '고치는 방법은 둘입니다.' }),
+        ' ① FM 스쿼드 보기에 「포지션」 열을 넣어 다시 내보내 가져오기(가장 정확합니다). ',
+        '② 아래 화면에서 직접 고르기 — 능력치로 추정한 자리를 미리 켜 두었으니 확인만 하면 됩니다.'
+      ]),
+      h('div', { class: 'row', style: 'margin-top:10px' }, [
+        h('button', {
+          class: 'btn pri',
+          onclick: function () { S.tab = 'squad'; S._open.bulkPos = true; render(); window.scrollTo(0, 0); }
+        }, ['포지션 한 번에 고르러 가기'])
+      ])
+    ]);
+    return card;
+  }
+
   function baseSignature() {
     return (S.standing || 'mid') + '#' + S.players.map(function (p) {
       return p.name + ':' + (p.positions || []).join('') + ':' + (p.age || '') + ':'
@@ -2399,6 +2541,9 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
       S._baseCache = { sig: sig, res: res };
     }
     if (!res) return;
+
+    var gate = positionGate(res);
+    if (gate) { root.appendChild(gate); return; }
 
     root.appendChild(h('div', { class: 'card' }, [
       h('h2', { text: '시즌 기본 전술' }),

@@ -819,7 +819,77 @@ await test('손으로 친 기록을 저장하면 경기 후 탭이 누적으로 
   await page.close();
 });
 
-// ── 13. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 13. 포지션이 없으면 전술을 내지 않는다 ────────────────────────────────
+/*
+ * 등록 포지션을 모르면 전원이 「낯선 자리」로 계산되어 선발이 사실상 능력치 총합
+ * 순서가 된다. 실제 토트넘 파일로 재 보니 수비형 미드필더가 리베로에 서고 10번이
+ * 스트라이커로 나갔고, 적합도는 열한 자리 모두 22~26, 골키퍼는 3이었다.
+ * 그걸 전술이라고 내놓으면 그대로 게임에 옮겨져 대패한다.
+ */
+await test('포지션을 모르면 전술 대신 무엇을 고칠지 말하고, 한 화면에서 고칠 수 있다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);            // 이 파일들에는 포지션 열이 없다
+
+  const st0 = await stored(page);
+  assert.equal(st0.players.filter((p) => (p.positions || []).length).length, 0,
+    '검사 전제가 깨졌다 — 이 파일에 포지션이 들어 있다');
+
+  // 숨은 탭에도 같은 단추가 있으므로 지금 보이는 탭으로 좁힌다
+  for (const [t, sel] of [['기본 전술', '#tab-base'], ['맞춤 전술', '#tab-result']]) {
+    await tab(page, t);
+    await page.waitForTimeout(1600);
+    const txt = await page.locator(sel).innerText();
+    assert.ok(/전술을 내지 않습니다/.test(txt), `${t}: 포지션 없이 전술을 내놨다`);
+    // 배치를 그리면 안 된다 — 경고를 붙여도 사람은 아래 그림을 쓴다
+    assert.equal(await page.locator(sel + ' .pitch').count(), 0, `${t}: 믿을 수 없는 배치를 그렸다`);
+    assert.ok(!/전술 요약|시즌 기본 전술/.test(txt), `${t}: 전술 본문이 그대로 나왔다`);
+  }
+
+  // 한 화면에서 고칠 수 있어야 한다
+  await page.locator('#tab-result button', { hasText: '포지션 한 번에 고르러 가기' }).first().click();
+  await page.waitForTimeout(900);
+  const posCard = page.locator('#tab-squad details.card').filter({ hasText: '포지션 한 번에 고르기' }).first();
+  assert.equal(await posCard.count(), 1, '포지션 카드가 없다');
+  assert.equal(await posCard.evaluate((el) => el.open), true, '눌러서 왔는데 카드가 접혀 있다');
+
+  await posCard.locator('button', { hasText: '빈 자리를 추정으로 채우기' }).click();
+  await page.waitForTimeout(1400);
+  const st1 = await stored(page);
+  const filled = st1.players.filter((p) => (p.positions || []).length).length;
+  assert.ok(filled >= st1.players.length - 2, `추정으로 ${filled}/${st1.players.length}명만 채웠다`);
+  // 추정으로 채운 것은 표시가 남아야 한다 — 확인 없이 쓰면 안 되는 값이다
+  assert.ok(st1.players.some((p) => p.posGuessed), '추정으로 채웠는데 표시가 없다');
+  const gk = st1.players.find((p) => p.name === 'Guglielmo Vicario');
+  assert.deepEqual(gk.positions, ['GK'], `골키퍼를 ${gk.positions}로 추정했다`);
+
+  // 이제 전술이 나와야 한다
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(1800);
+  const after = await page.locator('#tab-base').innerText();
+  assert.ok(!/전술을 내지 않습니다/.test(after), '포지션을 채웠는데 아직 막혀 있다');
+  assert.ok(/시즌 기본 전술/.test(after), '전술이 안 나온다');
+  assert.equal(await page.locator('#tab-base .pitch').count() >= 1, true, '배치가 안 그려졌다');
+
+  // 손으로 고치면 추정 표시가 사라진다
+  await tab(page, '스쿼드');
+  await page.waitForTimeout(900);
+  const card2 = page.locator('#tab-squad details.card').filter({ hasText: '포지션 한 번에 고르기' }).first();
+  // 이미 열려 있으면 summary를 누르면 도로 닫힌다
+  if (!(await card2.evaluate((el) => el.open))) {
+    await card2.locator('summary').first().click();
+    await page.waitForTimeout(400);
+  }
+  await card2.locator('.seg button', { hasText: '전원' }).click();
+  await page.waitForTimeout(900);
+  await card2.locator('.rep').first().locator('.chip').first().click();
+  await page.waitForTimeout(800);
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 14. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });

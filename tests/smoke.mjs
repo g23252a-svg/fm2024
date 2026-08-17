@@ -2284,6 +2284,98 @@ function run(opponent = {}, context = {}, players = squad) {
   assert.equal(tallSp.weakDefence, null, '제공권이 좋은데 수비 경고가 나왔다');
 }
 
+// ── 포지션 추정 ───────────────────────────────────────────────────────────
+/*
+ * 등록 포지션이 비면 이 도구는 사실상 아무것도 못 한다. 포지션 친숙도가 전원
+ * 0.34(낯선 자리)로 깔려서 선발이 "능력치 총합 순서"가 되기 때문이다.
+ * 실제 스쿼드로 재 보니 적합도가 열한 자리 모두 22~26, 골키퍼는 3이었다.
+ * 그런 배치를 게임에 옮기면 대패한다.
+ *
+ * 그래서 능력치로 자리를 추정해 한 화면에서 확인만 하고 넘어가게 한다.
+ * 추정이 완벽할 필요는 없다 — 사람이 확인하니까. 다만 확실한 것(골키퍼)은
+ * 반드시 맞아야 하고, 모를 때는 지어내면 안 된다.
+ */
+{
+  const POS_IDS = new Set(RD.POSITIONS.map((p) => p.id));
+
+  // 능력치를 거의 모르면 추정하지 않는다
+  // vm 안에서 만든 배열은 deepStrictEqual이 realm 때문에 실패한다 — 값으로 견준다
+  const blind = E.guessPositions({ name: 'x', attrs: { pac: 12 } }, squad);
+  assert.equal(blind.picks.length, 0, '능력치 하나로 자리를 추정했다');
+  assert.ok(blind.why && blind.why.length > 5, '왜 추정 못 했는지가 없다');
+  assert.equal(E.guessPositions({ name: 'y' }, squad).picks.length, 0);
+  assert.equal(E.guessPositions(null, squad).picks.length, 0);
+
+  /*
+   * 골키퍼는 확실히 갈라야 한다 — 여기서 틀리면 필드 선수를 골문에 세운다.
+   *
+   * 검사용 스쿼드(위 squad)는 필드 선수에게도 골키퍼 능력치를 11~12로 채워 둔다.
+   * 실제 FM 내보내기는 그렇지 않다 — 필드 선수의 골키퍼 칸은 2~3이고 진짜
+   * 골키퍼만 12를 넘는다. 그 신호가 없는 자료로는 어떤 방법으로도 못 가르므로,
+   * 여기서는 실제와 같은 모양의 작은 스쿼드로 본다.
+   */
+  const gkKeys = ['han', 'ref', 'ono', 'aer', 'cmd', 'kic', 'thr', 'tro', 'pun', 'com', 'ecc'];
+  const realish = squad.slice(0, 12).map((p) => {
+    const isGk = (p.positions || []).includes('GK');
+    const attrs = { ...p.attrs };
+    for (const k of gkKeys) attrs[k] = isGk ? (attrs[k] > 10 ? attrs[k] : 13) : 3;
+    return { ...p, attrs };
+  });
+  const gk = realish.find((p) => (p.positions || []).includes('GK'));
+  assert.ok(gk, '검사용 스쿼드에 골키퍼가 없다');
+  assert.equal(E.guessPositions(gk, realish).picks.join(','), 'GK',
+    `골키퍼를 ${E.guessPositions(gk, realish).picks}로 봤다`);
+
+  // 필드 선수를 골키퍼라고 하면 안 된다 (내보내기는 전원에게 GK 칸을 채워 준다)
+  for (const p of realish.filter((x) => !(x.positions || []).includes('GK'))) {
+    assert.ok(!E.guessPositions(p, realish).picks.includes('GK'),
+      `${p.name}을 골키퍼로 추정했다`);
+  }
+  // 신호가 없으면(전원 골키퍼 능력치가 비슷하면) 골키퍼라고 단정하지 않는다
+  for (const p of squad.filter((x) => !(x.positions || []).includes('GK')).slice(0, 8)) {
+    assert.ok(!E.guessPositions(p, squad).picks.includes('GK'),
+      `${p.name}을 골키퍼로 추정했다 — 가를 신호가 없으면 지어내면 안 된다`);
+  }
+
+  // 내놓는 자리는 실제 포지션 목록에 있어야 한다
+  for (const p of squad) {
+    const g = E.guessPositions(p, squad);
+    for (const id of g.picks) assert.ok(POS_IDS.has(id), `없는 포지션 ${id}을 추정했다`);
+    assert.ok(g.picks.length <= 2, `${p.name}: ${g.picks.length}개나 추정했다`);
+    assert.ok(!/NaN|undefined/.test(g.why || ''), `추정 설명에 이상한 값: ${g.why}`);
+  }
+
+  /*
+   * 좌우는 능력치로 알 수 없다. 측면을 짚었으면 반대쪽도 같이 내놓아야 한다 —
+   * 한쪽으로 단정하면 사람이 그걸 믿고 그대로 둔다.
+   */
+  const MIRROR = { DR: 'DL', DL: 'DR', WBR: 'WBL', WBL: 'WBR', MR: 'ML', ML: 'MR', AMR: 'AML', AML: 'AMR' };
+  for (const p of squad) {
+    const picks = E.guessPositions(p, squad).picks;
+    if (!picks.length || !MIRROR[picks[0]]) continue;
+    assert.equal(picks[1], MIRROR[picks[0]],
+      `${p.name}: 측면을 ${picks[0]}로 단정했다 (${picks.join('/')})`);
+  }
+
+  /*
+   * 그리고 이게 실제로 문제를 푸는지 — 포지션을 채우면 선발 적합도가 확 올라야
+   * 한다. 이 검사가 이 기능의 존재 이유다.
+   */
+  const stripped = squad.map((p) => ({ ...p, positions: [] }));
+  const before = E.baseTactic({ players: stripped, standing: 'mid' });
+  const guessed = stripped.map((p) => {
+    const g = E.guessPositions(p, stripped);
+    return g.picks.length ? { ...p, positions: g.picks } : p;
+  });
+  const after = E.baseTactic({ players: guessed, standing: 'mid' });
+  const avgFit = (r) => {
+    const f = r.xi.lineup.map((l) => l.fit).filter((v) => typeof v === 'number');
+    return f.reduce((a, b) => a + b, 0) / f.length;
+  };
+  assert.ok(avgFit(after) > avgFit(before) + 20,
+    `추정으로 채워도 적합도가 안 올랐다: ${Math.round(avgFit(before))} → ${Math.round(avgFit(after))}`);
+}
+
 // ── 조사를 손으로 적지 않는다 ─────────────────────────────────────────────
 /*
  * 「컴플리트 윙백가 있어」 「백업 적합도가 55이라」 「팀 기술 평균이 13로 낮습니다」.

@@ -1908,6 +1908,127 @@
   }
 
   /*
+   * ── 포지션 추정 ─────────────────────────────────────────────────────────
+   *
+   * FM 스쿼드 내보내기에 「포지션」 열이 없으면 이 도구는 사실상 아무것도 못 합니다.
+   * 등록 포지션을 모르면 포지션 친숙도가 전원 0.34(낯선 자리)로 깔리고, 그러면
+   * 선발이 "능력치 총합 순서"가 됩니다 — 수비형 미드필더가 리베로에 서고 10번이
+   * 스트라이커로 나갑니다. 그걸 그대로 게임에 옮기면 대패합니다.
+   *
+   * 그래서 두 가지를 합니다. 하나는 포지션을 모르면 전술을 아예 안 내놓는 것(아래
+   * generate/baseTactic 쪽이 아니라 화면에서 막습니다). 다른 하나가 이겁니다 —
+   * 능력치로 자리를 **추정**해서, 스물몇 명을 한 화면에서 몇 분 만에 확인만 하고
+   * 넘어가게 하는 것.
+   *
+   * 추정은 추정입니다. 확정하지 않고 후보로만 내놓고, 화면에서 사람이 누릅니다.
+   * 좌우는 능력치로 알 수 없으므로(주발이 힌트일 뿐) 중앙 자리를 먼저 내놓고
+   * 측면은 양쪽을 같이 제안합니다.
+   */
+  var POS_SIGNATURE = {
+    GK:  { han: 3, ref: 3, ono: 2, aer: 2, cmd: 2, kic: 1 },
+    DC:  { mar: 3, tck: 3, hea: 3, jum: 2, pos: 2, str: 2, cnt: 1, pac: -1 },
+    // 풀백과 윙어는 몸이 비슷합니다. 가르는 것은 마크·태클·위치 선정이고,
+    // 반대로 마무리가 높으면 풀백이 아닙니다. 여기서 안 갈라 두면 오른쪽 풀백이
+    // 전부 '측면 공격수'로 추정됩니다.
+    DR:  { mar: 3, tck: 3, pos: 2, pac: 2, acc: 2, sta: 2, cro: 1, fin: -2, hea: -1 },
+    DL:  { mar: 3, tck: 3, pos: 2, pac: 2, acc: 2, sta: 2, cro: 1, fin: -2, hea: -1 },
+    WBR: { pac: 3, acc: 3, sta: 3, cro: 2, dri: 2, wor: 2, mar: 2, tck: 1, fin: -2 },
+    WBL: { pac: 3, acc: 3, sta: 3, cro: 2, dri: 2, wor: 2, mar: 2, tck: 1, fin: -2 },
+    DM:  { tck: 3, pos: 3, ant: 2, cnt: 2, pas: 2, wor: 2, str: 1, fin: -2, dri: -1 },
+    MC:  { pas: 3, vis: 2, tec: 2, dec: 2, wor: 2, sta: 2, fir: 2, tea: 1, cro: -1 },
+    MR:  { cro: 3, dri: 2, pac: 2, sta: 2, wor: 2, tec: 1, fin: -1 },
+    ML:  { cro: 3, dri: 2, pac: 2, sta: 2, wor: 2, tec: 1, fin: -1 },
+    AMC: { vis: 3, pas: 3, tec: 3, dri: 2, fla: 2, otb: 2, fir: 2, tck: -1 },
+    AMR: { dri: 3, cro: 2, pac: 3, acc: 2, agi: 2, otb: 2, fla: 1, tck: -1 },
+    AML: { dri: 3, cro: 2, pac: 3, acc: 2, agi: 2, otb: 2, fla: 1, tck: -1 },
+    ST:  { fin: 3, otb: 3, cmp: 2, ant: 2, hea: 2, dri: 1, pac: 1, tck: -2 }
+  };
+  var GK_KEYS = ['han', 'ref', 'ono', 'aer', 'cmd', 'kic', 'thr', 'tro', 'pun', 'com', 'ecc'];
+
+  function guessPositions(player, squad) {
+    var a = (player && player.attrs) || {};
+    var known = Object.keys(a).filter(function (k) { return typeof a[k] === 'number' && a[k] > 0; });
+    if (known.length < 8) {
+      return { picks: [], confident: false, why: '능력치를 아는 항목이 ' + known.length + '개뿐이라 추정할 수 없습니다.' };
+    }
+
+    /*
+     * 골키퍼는 다른 잣대로 봅니다.
+     *
+     * FM 내보내기는 필드 선수에게도 골키퍼 능력치 칸을 채워 줍니다. 처음에는
+     * "골키퍼 능력치 평균 10 이상"으로 갈랐는데, 그러면 능력치가 고르게 높은
+     * 스쿼드에서 센터백이 전부 골키퍼가 됩니다. 절대값이 아니라 **팀 안에서
+     * 튀는지**로 봐야 합니다 — 진짜 골키퍼는 나머지와 격차가 큽니다.
+     */
+    function gkMeanOf(pl) {
+      var at = (pl && pl.attrs) || {};
+      var v = GK_KEYS.map(function (k) { return at[k]; })
+        .filter(function (x) { return typeof x === 'number' && x > 0; });
+      return v.length >= 4 ? avg(v) : null;
+    }
+    var gkMean = gkMeanOf(player);
+    if (gkMean !== null) {
+      var others = (squad || []).filter(function (pl) { return pl && pl !== player; })
+        .map(gkMeanOf).filter(function (v) { return v !== null; }).sort(function (x, y) { return x - y; });
+      var mid = others.length ? others[Math.floor(others.length / 2)] : null;
+      if (gkMean >= 10 && (mid === null || gkMean - mid >= 4)) {
+        return {
+          picks: ['GK'], confident: true,
+          why: '골키퍼 능력치 평균이 ' + Math.round(gkMean * 10) / 10
+            + (mid === null ? '' : '로 팀 중앙값(' + Math.round(mid * 10) / 10 + ')보다 크게 높습니다') + '.'
+        };
+      }
+    }
+
+    // 팀 평균 대비로 봅니다 — 절대값으로 보면 약팀은 전원이 수비수가 됩니다.
+    var mean = {};
+    var pool = (squad || []).filter(function (p) { return p && p.attrs; });
+    Object.keys(POS_SIGNATURE.ST).concat(Object.keys(POS_SIGNATURE.DC),
+      Object.keys(POS_SIGNATURE.AMC), Object.keys(POS_SIGNATURE.WBR),
+      Object.keys(POS_SIGNATURE.MC), Object.keys(POS_SIGNATURE.DM)).forEach(function (k) {
+      if (mean[k] !== undefined) return;
+      var vals = pool.map(function (p) { return p.attrs[k]; })
+        .filter(function (v) { return typeof v === 'number' && v > 0; });
+      mean[k] = vals.length ? avg(vals) : 10;
+    });
+
+    var scores = [];
+    Object.keys(POS_SIGNATURE).forEach(function (pos) {
+      if (pos === 'GK') return;
+      var w = POS_SIGNATURE[pos], sum = 0, wsum = 0, seen = 0;
+      Object.keys(w).forEach(function (k) {
+        var v = a[k];
+        wsum += Math.abs(w[k]);
+        if (typeof v !== 'number' || v <= 0) return;
+        seen++;
+        sum += (v - (mean[k] === undefined ? 10 : mean[k])) * w[k];
+      });
+      if (!seen || seen < Math.ceil(Object.keys(w).length / 2)) return;
+      scores.push({ pos: pos, score: sum / wsum });
+    });
+    if (!scores.length) return { picks: [], confident: false, why: '자리를 가를 만한 능력치가 없습니다.' };
+    scores.sort(function (x, y) { return y.score - x.score; });
+
+    /*
+     * 좌우는 능력치로 못 가릅니다. 1등이 한쪽 측면이면 반대쪽도 같이 냅니다 —
+     * 도구가 왼쪽이라고 단정하면 사람이 그걸 믿고 그대로 둡니다.
+     */
+    var MIRROR = { DR: 'DL', DL: 'DR', WBR: 'WBL', WBL: 'WBR', MR: 'ML', ML: 'MR', AMR: 'AML', AML: 'AMR' };
+    var top = scores[0];
+    var picks = [top.pos];
+    if (MIRROR[top.pos]) picks.push(MIRROR[top.pos]);
+    else if (scores[1] && top.score - scores[1].score < 0.6) picks.push(scores[1].pos);
+
+    var gap = scores[1] ? Math.round((top.score - scores[1].score) * 100) / 100 : null;
+    return {
+      picks: picks, confident: gap !== null && gap >= 0.5, scores: scores.slice(0, 3),
+      why: MIRROR[top.pos]
+        ? '측면 자원으로 보입니다 — 좌우는 능력치로 알 수 없으니 직접 고르세요.'
+        : (gap === null ? '' : '2위와 ' + gap + ' 차이입니다.')
+    };
+  }
+
+  /*
    * ── 경기 후 검토 ────────────────────────────────────────────────────────
    *
    * 「경기 중」 탭은 기대 득점이 쌓이는데 골이 없으면 "전술을 바꾸지 마세요"라고
@@ -3939,6 +4060,7 @@
     squadTiers: squadTiers,
     rotationPlan: rotationPlan,
     matchReview: matchReview,
+    guessPositions: guessPositions,
     condBand: condBand,
     TIRED_AT: TIRED_AT,
     NEW_TACTIC_GAP: NEW_TACTIC_GAP,
