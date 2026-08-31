@@ -3290,6 +3290,191 @@ function run(opponent = {}, context = {}, players = squad) {
   }
 }
 
+// ── 반올림이 부호에 대칭인가 ──────────────────────────────────────────────
+/*
+ * 자바스크립트의 Math.round는 항상 +∞ 쪽으로 붙는다 — Math.round(-0.5)는 -0이고
+ * Math.round(0.5)는 1이다. 즉 같은 크기로 밀어도 내리는 쪽만 한 칸 손해다.
+ *
+ * 이 비대칭이 이 코드베이스 버그의 뿌리였다. 폭을 좁히는 규칙, 태클을 자제시키는
+ * 규칙, 점유의 짧은 패스가 전부 「값은 있는데 아무 일도 안 일어나는」 상태였다.
+ * 개별 값은 검사로 걸러 내지만 여러 근거가 더해져 정확히 -0.5가 되는 것은 못 막는다.
+ * 실제로 맨시티 원정(열세)에서 수비 라인 누적이 -0.5라 라인이 안 내려갔다.
+ */
+{
+  for (const v of [0.5, 0.6, 1.5, 2.4, 0.4, 0]) {
+    // -0을 +0으로 되돌려 비교한다 (deepStrictEqual은 둘을 다른 값으로 본다)
+    assert.equal(E.axisStep(-v), -E.axisStep(v) + 0,
+      `${v}와 ${-v}가 다른 칸으로 간다 — 내리는 쪽만 손해를 본다`);
+  }
+  assert.equal(E.axisStep(0.5), 1, '+0.5가 안 움직인다');
+  assert.equal(E.axisStep(-0.5), -1, '-0.5가 안 움직인다');
+  assert.equal(E.axisStep(0.4), 0, '문턱 아래인데 움직인다');
+  assert.equal(E.axisStep(-0.4), 0, '문턱 아래인데 움직인다');
+
+  /*
+   * 그리고 실제 상황에서 확인한다. 원정에서 전력에 밀리는데 수비 라인이 안
+   * 내려가면, 그게 바로 강팀 원정에서 0-4로 지는 형태다.
+   */
+  const gegen = TD.OPP_PRESETS.find((x) => x.id === 'gegen');
+  const opp = Object.assign({ formationId: '433', traits: [] }, gegen.set);
+  const away = E.generate({
+    players: squad, opponent: opp,
+    context: { venue: 'away', odds: 'weak', goal: 'draw-ok' }
+  });
+  const home = E.generate({
+    players: squad, opponent: opp,
+    context: { venue: 'home', odds: 'strong', goal: 'must-win' }
+  });
+  assert.ok(away.instructions.axes.dline.index < home.instructions.axes.dline.index,
+    '원정 열세인데 홈 우세보다 수비 라인이 안 낮다');
+  assert.ok(away.instructions.axes.mentality.index < home.instructions.axes.mentality.index,
+    '원정 열세인데 홈 우세보다 멘탈리티가 안 낮다');
+}
+
+// ── 전술 방향이 실제로 지시를 바꾸는가 ────────────────────────────────────
+/*
+ * 이 도구가 내리는 가장 큰 결정이 「어떤 축구를 할 것인가」인데, 그 결정이 오래도록
+ * 팀 지시를 거의 안 바꾸고 있었다. 값이 전부 반올림 문턱 아래였기 때문이다 —
+ * 0.4를 밀면 한 칸도 안 움직이고, Math.round(-0.5)는 -0이라 역시 안 움직인다.
+ *
+ * 실제 스쿼드로 뽑아 보니 축 열한 개가 전부 「표준」이었다. 상위권 팀에게 FM
+ * 기본값을 주면서 「점유 축구」라고 부르고 있었던 셈이다.
+ *
+ * 그래서 두 가지를 못 박는다.
+ *   1. 각 방향은 혼자서도 축을 최소 두 칸 움직여야 한다.
+ *   2. 일곱 방향이 서로 다른 지시를 내야 한다. 이름만 다르고 지시가 같으면
+ *      그건 방향이 아니라 이름표다.
+ */
+{
+  const AX = TD.AXES;
+  const seen = new Map();
+  for (const id of Object.keys(TD.PLANS)) {
+    const eff = E.PLAN_EFFECTS[id];
+    assert.ok(eff, `전술 방향 ${id}에 지시 효과가 없다`);
+
+    // 경계값은 아무 일도 안 한다 — 규칙에 적용한 기준을 방향에도 똑같이 적용한다
+    for (const [k, v] of Object.entries(eff.axis || {})) {
+      assert.ok(AX[k], `방향 ${id}가 없는 축 ${k}를 민다`);
+      assert.notEqual(Math.abs(v), 0.5, `방향 ${id}의 ${k}가 ±0.5다 — 반올림에서 한 칸도 안 움직인다`);
+      assert.ok(Math.abs(v) > 0.05, `방향 ${id}의 ${k}가 사실상 0이다`);
+    }
+    for (const k of Object.keys(eff.toggle || {})) {
+      assert.ok(TD.TOGGLES[k], `방향 ${id}가 없는 지시 ${k}를 민다`);
+    }
+
+    const r = E.planInstructions(id);
+    const moved = Object.values(r.axes).filter((a) => a.shifted);
+    assert.ok(moved.length >= 2,
+      `방향 ${TD.PLANS[id].ko}가 축을 ${moved.length}개만 움직인다 — 방향을 골라도 지시가 그대로다`);
+
+    // 축 인덱스와 켜진 토글로 지문을 만든다. 같으면 두 방향이 같은 전술이다.
+    const sig = Object.entries(r.axes).map(([k, a]) => k + a.index).join(',')
+      + '|' + Object.keys(r.toggles).filter((k) => r.toggles[k].on).sort().join(',');
+    if (seen.has(sig)) {
+      assert.fail(`「${TD.PLANS[id].ko}」와 「${seen.get(sig)}」의 지시가 완전히 같다`);
+    }
+    seen.set(sig, TD.PLANS[id].ko);
+  }
+  assert.equal(seen.size, Object.keys(TD.PLANS).length, '서로 같은 지시를 내는 방향이 있다');
+
+  /*
+   * 방향끼리 성격이 반대인 축은 반대로 가야 한다. 여기가 뒤집히면 이름과 내용이
+   * 어긋나는데, 지문 검사만으로는 안 잡힌다(다르기만 하면 통과하므로).
+   */
+  const ix = (id, k) => E.planInstructions(id).axes[k].index;
+  assert.ok(ix('possession', 'directness') < ix('counter', 'directness'),
+    '점유가 역습보다 직선적이다');
+  assert.ok(ix('press-high', 'dline') > ix('low-block', 'dline'),
+    '전방 압박이 내려앉기보다 라인이 낮다');
+  assert.ok(ix('press-high', 'press') > ix('low-block', 'press'),
+    '전방 압박이 내려앉기보다 덜 압박한다');
+  assert.ok(ix('wide-cross', 'width') > ix('overload-centre', 'width'),
+    '측면·크로스가 중앙 과부하보다 좁다');
+  assert.ok(ix('counter', 'dline') < ix('press-high', 'dline'),
+    '역습이 전방 압박보다 라인이 높다');
+
+  /*
+   * 그리고 실제 파이프라인에서도 확인한다. 방향만 살아 있고 최종 산출이 그대로면
+   * 아무 소용이 없다 — 사용자가 보는 것은 이쪽이다.
+   */
+  for (const st of ['top', 'mid', 'low']) {
+    const b = E.baseTactic({ players: squad, standing: st });
+    if (!b) continue;
+    const shifted = Object.values(b.instructions.axes).filter((a) => a.shifted).length;
+    assert.ok(shifted >= 2,
+      `${st} 기본 전술에서 움직인 축이 ${shifted}개다 — 사실상 FM 기본값을 내주고 있다`);
+  }
+}
+
+// ── 세 장짜리 슬롯 세트를 설계해서 내준다 ─────────────────────────────────
+/*
+ * 이 도구는 슬롯을 진단만 했다 — "셋 다 같은 성격입니다", "뼈대가 쪼개졌습니다".
+ * 무엇을 만들어야 하는지는 말하지 않았다. 실제 시즌 기록에서 그게 그대로
+ * 드러났다 — 원정 네 경기 승점 0. 강팀 원정에 꺼낼 형태가 아예 없었다.
+ *
+ * 세 장은 상황이 셋이라서 셋이지 형태가 셋이라서가 아니다. 그러니 세 장이
+ * 서로 다른 답이어야 하고, 뼈대는 되도록 같아야 한다.
+ */
+{
+  const kit = E.slotKit({ players: squad, standing: 'top' });
+  assert.ok(kit, '슬롯 세트를 못 냈다');
+  assert.equal(kit.picks.length, 3, `세 장이 나와야 하는데 ${kit.picks.length}장이다`);
+
+  const roles = kit.picks.map((p) => p.role);
+  assert.deepEqual([...roles].sort().join(','), ['break', 'hold', 'primary'].join(','),
+    '주력 · 버티기 · 공략이 다 나와야 한다');
+
+  // 방향이 겹치면 팀 지시가 글자까지 같은 두 장을 들고 다니게 된다
+  const plans = kit.picks.map((p) => p.planId);
+  assert.equal(new Set(plans).size, 3, `방향이 겹친다: ${plans.join(', ')}`);
+  const forms = kit.picks.map((p) => p.formationId);
+  assert.equal(new Set(forms).size, 3, `포메이션이 겹친다: ${forms.join(', ')}`);
+
+  // 버티기는 실제로 내려앉는 방향이어야 한다 — 이름만 버티기면 소용없다
+  const hold = kit.picks.find((p) => p.role === 'hold');
+  const primary = kit.picks.find((p) => p.role === 'primary');
+  assert.ok(['low-block', 'counter'].includes(hold.planId), `버티기가 ${hold.planId}다`);
+  assert.ok(hold.instructions.axes.dline.index < primary.instructions.axes.dline.index,
+    '버티기의 수비 라인이 주력보다 낮지 않다 — 강팀 원정에 못 쓴다');
+
+  // 세 장이 서로 다른 지시를 내야 한다
+  const sigs = kit.picks.map((p) => Object.entries(p.instructions.axes).map(([k, a]) => k + a.index).join(','));
+  assert.equal(new Set(sigs).size, 3, '세 장 중 지시가 같은 장이 있다');
+
+  /*
+   * 뼈대를 맞추느라 잃은 점수를 숨기지 않는다. 0으로 적어 두면 사람이 손해를
+   * 모른 채 훈련만 아끼게 되므로, 값이 실제 차이와 맞는지까지 검산한다.
+   */
+  for (const p of kit.picks) {
+    assert.equal(typeof p.shapeCost, 'number', `${p.roleKo}에 뼈대 비용이 없다`);
+    assert.ok(p.shapeCost >= 0, '뼈대를 맞췄는데 점수가 올랐다');
+    assert.ok(Math.abs(p.shapeCost - (p.freeScore - p.score)) < 0.051,
+      `${p.roleKo}의 뼈대 비용이 실제 차이와 다르다: ${p.shapeCost} vs ${p.freeScore - p.score}`);
+    assert.ok(p.formationKo && p.planKo && p.why, `${p.role}에 설명이 빠졌다`);
+  }
+
+  /*
+   * 그리고 후보 구성 자체를 못 박는다. 어느 스쿼드에서 무엇이 1등이 되느냐에
+   * 기대면, 공격 방향이 「버티기」 후보에 섞여 들어가도 그 스쿼드에서만 안 뽑히면
+   * 검사가 통과해 버린다.
+   */
+  const HOLD_OK = ['low-block', 'counter'];
+  const holdRole = E.KIT_ROLES.find((r) => r.id === 'hold');
+  for (const id of holdRole.plans) {
+    assert.ok(HOLD_OK.includes(id), `「버티기」 후보에 ${TD.PLANS[id].ko}가 들어 있다`);
+  }
+  const breakRole = E.KIT_ROLES.find((r) => r.id === 'break');
+  for (const id of breakRole.plans) {
+    assert.ok(!HOLD_OK.includes(id), `「공략」 후보에 수비 방향 ${TD.PLANS[id].ko}가 들어 있다`);
+    assert.ok(TD.PLANS[id], `「공략」 후보에 없는 방향 ${id}`);
+  }
+  assert.ok(kit.note, '뼈대에 대해 아무 말도 안 한다');
+
+  // 11명이 안 되면 지어내지 않는다
+  assert.equal(E.slotKit({ players: squad.slice(0, 8), standing: 'top' }), null,
+    '선수가 모자란데 슬롯 세트를 냈다');
+}
+
 // ── 일정표에서 시즌 전체를 읽는다 ─────────────────────────────────────────
 /*
  * 경기를 넣는 길이 한 건씩 손으로 저장하는 것 하나뿐이었다. 그러면 도구를 쓰기

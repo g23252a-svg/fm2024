@@ -2256,16 +2256,51 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
      * 그런데 화면은 「맞춤 전술」이라고 적혀 있으니 맞춰진 줄 압니다.
      * 포지션 게이트와 같은 원칙 — 도구가 모르면 모른다고 말합니다.
      */
-    var shiftedCount = Object.keys(res.instructions.axes).filter(function (k) {
-      return res.instructions.axes[k].shifted;
-    }).length;
-    if (!shiftedCount && !(S.opponent.traits || []).length) {
+    /*
+     * 처음에는 「움직인 축이 하나도 없으면」으로 판정했습니다. 그때는 전술 방향이
+     * 축을 아예 안 밀고 있어서 그 둘이 우연히 같은 뜻이었습니다. 방향을 고쳐
+     * 살려 놓자 축은 움직이는데 기본 전술과는 여전히 똑같은 상태가 생겼고,
+     * 안내가 통째로 사라졌습니다 — 브라우저 검사가 이걸 잡았습니다.
+     *
+     * 이 안내가 실제로 주장하는 것은 「기본 전술과 같다」이므로, 세는 대신
+     * 기본 전술과 직접 비교합니다.
+     */
+    function instrSig(ins) {
+      if (!ins) return null;
+      return Object.keys(ins.axes).sort().map(function (k) { return k + ins.axes[k].index; }).join(',')
+        + '|' + Object.keys(ins.toggles).filter(function (k) { return ins.toggles[k].on; }).sort().join(',');
+    }
+    var baseIns = null;
+    try {
+      var bSig = baseSignature();
+      var bRes = (S._baseCache && S._baseCache.sig === bSig) ? S._baseCache.res : null;
+      if (!bRes) {
+        bRes = E.baseTactic({ players: S.players, standing: S.standing || 'mid' });
+        if (bRes) S._baseCache = { sig: bSig, res: bRes };
+      }
+      baseIns = bRes ? bRes.instructions : null;
+    } catch (e) { baseIns = null; }
+    var sameAsBase = !!baseIns && instrSig(baseIns) === instrSig(res.instructions);
+    /*
+     * 이 안내가 뜨는 조건은 「상대 화면에 아무것도 안 넣었다」입니다. 지시가
+     * 기본 전술과 우연히 같은지 다른지가 아니라, 상대에 맞출 근거가 없다는
+     * 사실 자체가 알려야 할 내용입니다.
+     */
+    var OPP_DEFAULT = {
+      mentality: 3, dline: 2, loe: 2, press: 2, width: 3, directness: 2, tempo: 2,
+      transitionLost: 'regroup', transitionWon: 'hold'
+    };
+    var oppUntouched = !(S.opponent.traits || []).length
+      && Object.keys(OPP_DEFAULT).every(function (k) { return S.opponent[k] === OPP_DEFAULT[k]; });
+    if (oppUntouched) {
       root.appendChild(h('div', { class: 'card' }, [
         h('div', { class: 'warn high' }, [
           h('span', { class: 'ic', text: '!' }),
           h('span', {}, [
-            h('b', { text: '지금은 팀 지시가 「기본 전술」과 같습니다. ' }),
-            '상대 성향을 아무것도 안 넣어서 바뀐 지시가 하나도 없습니다 — 포메이션 상성만 반영됐습니다.',
+            h('b', { text: '상대 정보를 아무것도 안 넣었습니다. ' }),
+            sameAsBase
+              ? '그래서 지금 팀 지시는 「기본 전술」과 글자까지 같습니다 — 포메이션 상성만 반영됐습니다.'
+              : '성향이 전부 기본값이라 상대에 맞춰 움직인 지시가 없습니다 — 아래는 「기본 전술」과 같은 근거로 나온 것입니다.',
             h('span', { class: 'fixnote', text:
               '「상대」 탭에서 상대 유형을 하나 고르면(하이라인 압박 / 깊은 블록 역습 / 점유 …) '
               + '수비 라인 · 압박 · 템포 · 폭이 그 상대에 맞게 움직입니다. 한 번 누르면 끝입니다.' })
@@ -2826,6 +2861,7 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
     ]));
 
     root.appendChild(tacticSlotCard(res));
+    root.appendChild(slotKitCard());
 
     var rot = rotationCard(res);
     if (rot) root.appendChild(rot);
@@ -3484,6 +3520,83 @@ body.overlay .card > h2{font-size:12px;margin-bottom:6px}
    * 그래서 FM처럼 전술을 최대 세 개 저장해 두고, 경기마다 그중에서 고릅니다.
    */
   var MAX_TACTICS = E.MAX_SLOTS;   // 엔진과 한 군데서 셉니다 (FM도 세 개까지)
+
+  /*
+   * ── 이 스쿼드로 만들어 둘 세 장 ─────────────────────────────────────────
+   *
+   * 이 도구는 슬롯을 진단만 했습니다 — "셋 다 같은 성격입니다", "뼈대가
+   * 쪼개졌습니다". 맞는 말인데 **무엇을 만들어야 하는지는 말하지 않았습니다.**
+   *
+   * 실제 시즌 기록에서 그게 그대로 드러났습니다. 원정 네 경기 승점 0, 1득 10실.
+   * 강팀 원정에서 꺼낼 형태가 아예 없었던 것인데, 도구는 기본 전술 한 장만
+   * 내주고 "슬롯을 저장하세요"라고만 했습니다. 무엇을 저장하라는 말은 없이.
+   *
+   * 저장한 슬롯을 보여 주는 카드와는 따로 둡니다 — 하나는 지금 가진 것이고
+   * 하나는 만들어야 할 것이라, 한 카드에 섞으면 어느 쪽이 어느 쪽인지 헷갈립니다.
+   */
+  function slotKitCard() {
+    var kit = null;
+    try { kit = E.slotKit({ players: S.players, standing: S.standing || 'mid' }); } catch (e) { kit = null; }
+    if (!kit || kit.picks.length < 2) return null;
+
+    var card = rememberOpen('slotKit', h('details', { class: 'card' }));
+    card.appendChild(h('summary', { style: 'cursor:pointer' }, [
+      h('span', { style: 'font-size:15px;font-weight:800', text: '이 스쿼드로 만들어 둘 세 장' }),
+      h('span', { class: 'tiny muted', text: '  주력 · 버티기 · 공략' })
+    ]));
+    card.appendChild(h('div', { class: 'desc', style: 'margin-top:8px' }, [
+      '한 장으로 시즌을 치르면 ', h('b', { style: 'color:var(--text)', text: '강팀 원정과 최하위 홈경기를 같은 형태로 치르게 됩니다' }),
+      '. 상황이 세 가지라 세 장입니다 — 형태가 세 가지라서가 아닙니다. ',
+      'FM에서 이 포메이션과 지시로 전술을 하나씩 만들어 저장해 두세요.'
+    ]));
+
+    kit.picks.forEach(function (pk) {
+      var saved = (S.tactics || []).some(function (t) { return t.formationId === pk.formationId; });
+      var ax = Object.keys(pk.instructions.axes)
+        .filter(function (k) { return pk.instructions.axes[k].shifted; })
+        .map(function (k) { return pk.instructions.axes[k].ko + ' ' + pk.instructions.axes[k].label; });
+      var tg = Object.keys(pk.instructions.toggles)
+        .filter(function (k) { return pk.instructions.toggles[k].on; })
+        .map(function (k) { return pk.instructions.toggles[k].ko; });
+
+      card.appendChild(h('div', { class: 'rep kitrow', style: 'margin-bottom:8px' }, [
+        h('div', { class: 'row', style: 'gap:7px;align-items:baseline;flex-wrap:wrap' }, [
+          h('b', { style: 'color:var(--acc2)', text: pk.roleKo }),
+          h('b', { text: pk.formationKo }),
+          h('span', { class: 'tiny muted', text: pk.planKo }),
+          saved ? h('span', { class: 'tiny', style: 'color:var(--acc)', text: '저장됨' }) : null,
+          /*
+           * 뼈대를 맞추느라 점수를 얼마나 잃었는지 숨기지 않습니다. 크면
+           * 훈련이 쪼개지는 값을 치르더라도 다른 형태를 쓸지 사람이 정해야 합니다.
+           */
+          !pk.sameShape ? h('span', { class: 'tiny', style: 'color:var(--warn)', text: '뼈대 다름 · 훈련 쪼개짐' })
+            : pk.shapeCost >= 3 ? h('span', { class: 'tiny muted', text: '뼈대 맞추느라 −' + pk.shapeCost })
+              : null
+        ]),
+        h('div', { class: 'tiny muted', style: 'margin-top:3px', text: pk.why }),
+        h('div', { class: 'small', style: 'margin-top:5px;color:var(--dim)',
+          text: (ax.join(' · ') || '지시 변화 없음') + (tg.length ? '  /  ' + tg.join(' · ') : '') }),
+        h('div', { class: 'row', style: 'margin-top:6px' }, [
+          h('button', {
+            class: 'btn sm' + (saved ? ' ghost' : ''),
+            onclick: function () {
+              if (saved) { toast('이미 같은 포메이션이 슬롯에 있습니다.'); return; }
+              if ((S.tactics || []).length >= MAX_TACTICS) { toast('슬롯이 세 개 다 찼습니다 — FM도 세 개까지입니다.'); return; }
+              S.tactics = (S.tactics || []).concat([{
+                id: 't' + Date.now(),
+                name: pk.roleKo + ' · ' + pk.planKo,
+                formationId: pk.formationId, planId: pk.planId, planKo: pk.planKo
+              }]);
+              save(); render();
+              toast('「' + pk.roleKo + '」을 슬롯에 넣었습니다.');
+            }
+          }, [saved ? '이미 저장됨' : '이 장을 슬롯에 넣기'])
+        ])
+      ]));
+    });
+    card.appendChild(h('div', { class: 'tiny muted', text: kit.note }));
+    return card;
+  }
 
   function tacticSlotCard(res) {
     var card = h('div', { class: 'card' }, [

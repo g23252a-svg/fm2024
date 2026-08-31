@@ -933,7 +933,7 @@ await test('상대 유형을 안 고르면 그렇다고 말하고, 고르면 지
   await tab(page, '맞춤 전술');
   await page.waitForTimeout(1800);
   const before = await page.locator('#tab-result').innerText();
-  assert.ok(/기본 전술」과 같습니다/.test(before),
+  assert.ok(/상대 정보를 아무것도 안 넣었습니다/.test(before),
     `상대 정보가 없는데 아무 말도 안 한다: ${before.slice(0, 300)}`);
 
   // 상대 유형을 하나 고른다
@@ -947,7 +947,7 @@ await test('상대 유형을 안 고르면 그렇다고 말하고, 고르면 지
   await tab(page, '맞춤 전술');
   await page.waitForTimeout(1800);
   const after = await page.locator('#tab-result').innerText();
-  assert.ok(!/기본 전술」과 같습니다/.test(after), '상대 유형을 골랐는데 아직 안 바뀌었다');
+  assert.ok(!/상대 정보를 아무것도 안 넣었습니다/.test(after), '상대 유형을 골랐는데 아직 안 바뀌었다');
 
   // 실제로 지시가 몇 개나 움직였는지 엔진 쪽에서 확인한다
   const moved = await page.evaluate(() => {
@@ -1122,7 +1122,65 @@ await test('일정표를 넣으면 시즌 성적이 한 번에 들어오고, 점
   await page.close();
 });
 
-// ── 17. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
+// ── 17. 세 장짜리 슬롯 세트를 실제로 내주는가 ─────────────────────────────
+/*
+ * 원정 네 경기 승점 0. 강팀 원정에 꺼낼 형태가 아예 없었는데, 도구는 기본 전술
+ * 한 장만 내주고 "슬롯을 저장하세요"라고만 했다 — 무엇을 저장하라는 말 없이.
+ * 이제 세 장을 통째로 설계해서 내주고, 눌러서 바로 슬롯에 넣을 수 있어야 한다.
+ */
+await test('스쿼드에 맞는 세 장(주력·버티기·공략)을 내주고 눌러서 슬롯에 넣는다', async () => {
+  const page = await openPage();
+  page.on('dialog', (d) => d.accept());
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await importSquad(page);
+  await withPositions(page);
+
+  await tab(page, '기본 전술');
+  await page.waitForTimeout(2000);
+  const kit = page.locator('#tab-base details.card').filter({ hasText: '이 스쿼드로 만들어 둘 세 장' }).first();
+  assert.equal(await kit.count(), 1, '세 장 카드가 없다');
+  if (!(await kit.evaluate((el) => el.open))) {
+    await kit.locator('summary').first().click();
+    await page.waitForTimeout(500);
+  }
+  const rows = kit.locator('.kitrow');
+  assert.equal(await rows.count(), 3, `세 장이 나와야 하는데 ${await rows.count()}장이다`);
+  const txt = await kit.innerText();
+  for (const role of ['주력', '버티기', '공략']) {
+    assert.ok(txt.includes(role), `「${role}」이 없다: ${txt.slice(0, 300)}`);
+  }
+
+  // 눌러서 슬롯에 들어가야 한다 — 읽고 나서 직접 옮겨 적게 두면 아무도 안 한다
+  await rows.nth(1).locator('button', { hasText: '슬롯에 넣기' }).click();
+  await page.waitForTimeout(1200);
+  const st = await stored(page);
+  assert.equal(st.tactics.length, 1, '슬롯에 안 들어갔다');
+  assert.ok(/버티기/.test(st.tactics[0].name), `슬롯 이름이 이상하다: ${st.tactics[0].name}`);
+
+  // 같은 장을 또 누르면 늘어나면 안 된다
+  await page.waitForTimeout(400);
+  const kit2 = page.locator('#tab-base details.card').filter({ hasText: '이 스쿼드로 만들어 둘 세 장' }).first();
+  assert.ok(/저장됨/.test(await kit2.innerText()), '저장했다는 표시가 없다');
+
+  /*
+   * 그리고 진짜 목적 — 세 장의 지시가 서로 달라야 한다. 이름만 셋이고 지시가
+   * 같으면 슬롯 세 칸을 낭비하는 것이다.
+   */
+  const distinct = await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => /fm24/i.test(x));
+    const d = JSON.parse(localStorage.getItem(k));
+    const kit = window.FM_ENGINE.slotKit({ players: d.players, standing: d.standing || 'mid' });
+    const sigs = kit.picks.map((p) => Object.entries(p.instructions.axes)
+      .map(([kk, a]) => kk + a.index).join(','));
+    return { n: kit.picks.length, uniq: new Set(sigs).size };
+  });
+  assert.equal(distinct.uniq, distinct.n, '세 장 중 지시가 같은 장이 있다');
+
+  assert.deepEqual(page.errors, [], '콘솔 오류: ' + page.errors.join(' | '));
+  await page.close();
+});
+
+// ── 18. 좁은 화면에서 가로로 넘치지 않는다 ────────────────────────────────
 await test('320px 화면에서 어느 탭도 가로로 넘치지 않는다', async () => {
   const page = await openPage();
   await page.setViewportSize({ width: 320, height: 800 });

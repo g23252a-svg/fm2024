@@ -678,15 +678,114 @@
   }
 
   // 플랜이 정해지면 그 플랜이 다시 지시와 역할 선호를 밉니다.
+  /*
+   * ── 전술 방향이 실제로 지시를 바꿔야 한다 ────────────────────────────────
+   *
+   * 이 표가 이 도구에서 가장 중요한 표입니다. 「어떤 축구를 할 것인가」를 FM의
+   * 팀 지시로 옮기는 자리이기 때문입니다. 그런데 오래도록 거의 아무 일도 하지
+   * 않고 있었습니다 — 값이 전부 반올림 문턱 아래였기 때문입니다.
+   *
+   * 축은 정수 칸이고 인덱스는 Math.round(기본값 + 누적)으로 정합니다. 그래서
+   * 0.4를 밀면 한 칸도 안 움직이고, -0.5는 Math.round(-0.5)가 -0이라 역시
+   * 안 움직입니다. 실제로 재 보니 이랬습니다.
+   *
+   *     뒷공간 침투   축 0/2 움직임
+   *     점유·중앙 조립 축 0/2
+   *     역습         축 0/3
+   *     중앙 과부하    축 0/1
+   *
+   * 즉 「점유·중앙 조립로 하세요」라고 말하면서 내주는 팀 지시가 「역습」과
+   * 완전히 같았습니다. 실제 스쿼드로 뽑아 보니 축 열한 개가 전부 「표준」이고
+   * 켜지는 토글은 둘뿐이었습니다 — 상위권 팀에게 사실상 FM 기본값을 주고
+   * 「점유 축구」라고 불렀던 셈입니다.
+   *
+   * 그래서 일곱 방향을 전부 다시 썼습니다. 기준은 두 가지입니다.
+   *   1. 각 방향은 혼자서도 축을 최소 두 칸 움직여야 한다.
+   *   2. 일곱 방향이 서로 다른 지시를 내야 한다 — 이름만 다르고 지시가 같으면
+   *      그건 방향이 아니다.
+   * 둘 다 검사로 못 박았습니다.
+   *
+   * 값은 FM에서 그 축구를 하려면 실제로 어떤 지시를 켜는지를 옮긴 것입니다.
+   * 두 방향이 함께 뽑히면 2위는 0.5배로 섞이므로, 값이 서로 상쇄되지 않도록
+   * 각 방향의 성격이 분명한 축에만 큰 값을 둡니다.
+   */
   var PLAN_EFFECTS = {
-    'in-behind': { axis: { directness: 0.4, tempo: 0.3 }, toggle: { pis: 1.2, wbib: -0.6 } },
-    possession: { axis: { directness: -0.5, tempo: -0.2 }, toggle: { pod: 1.2, wbib: 0.8, sos: -0.8 } },
-    'wide-cross': { axis: { width: 0.8 }, toggle: { ovl_l: 0.5, ovl_r: 0.5, cr_byline: 0.5 } },
-    counter: { axis: { dline: -0.4, tempo: 0.4, directness: 0.4 }, toggle: { counter: 1.6, regroup: 1, pod: -0.5 } },
-    'press-high': { axis: { loe: 0.9, press: 0.9, dline: 0.6 }, toggle: { counterpress: 1.4, ptp: 0.8 } },
-    'low-block': { axis: { dline: -0.9, loe: -0.9, press: -0.5, mentality: -0.5 }, toggle: { regroup: 1.2, pod: -0.6 } },
-    'overload-centre': { axis: { width: -0.5 }, toggle: { focus_c: 0.8 } }
+    /*
+     * 뒷공간 침투 — 상대 라인 뒤로 빠르게 넘긴다.
+     * 길게 잡아 두고 조립할 이유가 없으므로 짧은 패스와 박스 안 배급은 끕니다.
+     */
+    'in-behind': {
+      axis: { directness: 1.2, tempo: 0.8, dline: 0.6, dribble: 0.4 },
+      toggle: { pis: 1.6, wbib: -1.2, hec: 0.6, pod: -0.6 }
+    },
+    /*
+     * 점유·중앙 조립 — 짧게 돌리며 중앙에서 상대를 끌어낸다.
+     * 폭을 좁히는 것이 이 방향의 핵심입니다. 넓게 벌리면 패스 거리가 길어져
+     * 「짧게」와 정면으로 부딪힙니다.
+     */
+    possession: {
+      axis: { directness: -1.2, tempo: -0.7, width: -0.8, dline: 0.6, creativity: -0.6 },
+      toggle: { pod: 1.6, wbib: 1.2, sos: -1.2, gk_cb: 0.8 }
+    },
+    /*
+     * 측면·크로스 — 폭을 잡고 박스로 넣는다.
+     * 크로스 종류와 오버랩 방향은 선발을 짠 뒤에 정합니다(그쪽 선수의 역할을
+     * 봐야 하므로). 여기서는 폭과 목표 지점만 잡습니다.
+     */
+    'wide-cross': {
+      axis: { width: 1.4, directness: 0.6, tempo: 0.4 },
+      toggle: { ovl_l: 0.8, ovl_r: 0.8, cr_byline: 0.8, wbib: -0.8, gk_flank: 0.5 }
+    },
+    /*
+     * 역습 — 내려서 받아 놓고 뺏는 즉시 나간다.
+     * 라인을 내리는 것과 빠르게 직선적으로 나가는 것이 한 묶음이라야 합니다.
+     * 하나만 하면 내려앉기만 하고 못 나가거나, 올린 채로 역습만 노리게 됩니다.
+     */
+    counter: {
+      axis: { dline: -1.0, loe: -0.8, tempo: 0.8, directness: 1.2, mentality: -0.6 },
+      toggle: { counter: 1.8, regroup: 1.4, pod: -1.2, distquick: 0.8, wbib: -0.8 }
+    },
+    /*
+     * 전방 압박 — 높이 올라가 상대 진영에서 뺏는다.
+     * 뺏은 뒤에 다시 압박하지 않으면 라인만 높고 뒤가 비는 형태가 됩니다.
+     */
+    'press-high': {
+      axis: { loe: 1.2, press: 1.2, dline: 0.8, mentality: 0.6, tackling: 0.6 },
+      toggle: { counterpress: 1.6, ptp: 1.0, offside: 0.6, distslow: -0.6 }
+    },
+    /*
+     * 내려앉기 — 뒤를 지우고 버틴다.
+     * 압박과 멘탈리티까지 같이 내려야 「라인은 낮은데 앞은 나가 있는」 형태가
+     * 안 생깁니다. 그 어긋남이 실점의 가장 흔한 원인입니다.
+     */
+    'low-block': {
+      axis: { dline: -1.2, loe: -1.2, press: -0.8, mentality: -0.8, width: -0.6, timewaste: 0.6 },
+      toggle: { regroup: 1.6, pod: -1.0, holdshape: 1.0, tightmark: 0.6 }
+    },
+    /*
+     * 중앙 과부하 — 중앙에 사람을 모아 숫자로 이긴다.
+     * 폭을 확실히 좁히고 시선을 중앙에 둡니다. 언더랩은 측면 선수를 안쪽으로
+     * 들여보내는 것이라 이 방향과 같은 편입니다.
+     */
+    'overload-centre': {
+      axis: { width: -1.4, directness: -0.6, dribble: 0.4 },
+      toggle: { focus_c: 1.4, unl_l: 0.6, unl_r: 0.6, cr_low: 0.5 }
+    }
   };
+
+  /*
+   * 전술 방향 하나만 놓고 봤을 때 나오는 지시.
+   *
+   * 화면에서 「이 방향을 고르면 무엇이 달라지나」를 보여 주는 데 쓰고,
+   * 검사에서 일곱 방향이 서로 다른 지시를 내는지 확인하는 데 씁니다.
+   * 방향 이름만 다르고 지시가 같으면 그건 방향이 아닙니다.
+   */
+  function planInstructions(planId) {
+    if (!TD.PLANS[planId]) return null;
+    var acc = accumulate([]);
+    var top = [{ id: planId, ko: TD.PLANS[planId].ko, desc: TD.PLANS[planId].desc, score: 1 }];
+    return finaliseInstructions(acc, top);
+  }
 
   function resolvePlans(planScores) {
     var entries = Object.keys(planScores).map(function (k) {
@@ -710,6 +809,28 @@
     return w;
   }
 
+  /*
+   * 누적값을 몇 칸으로 옮길지.
+   *
+   * 그냥 Math.round(기본값 + 누적)을 쓰면 안 됩니다. 자바스크립트의 반올림은
+   * 항상 +∞ 쪽으로 붙어서 Math.round(-0.5)는 -0, Math.round(0.5)는 1입니다.
+   * 즉 **같은 크기로 밀어도 내리는 쪽만 한 칸 손해**를 봅니다.
+   *
+   * 이 비대칭이 이 코드베이스에서 나온 버그의 뿌리였습니다 — 폭을 좁히는 규칙,
+   * 태클을 자제시키는 규칙, 점유의 짧은 패스가 전부 「값은 들어 있는데 아무 일도
+   * 안 일어나는」 상태였습니다. 개별 값은 검사로 걸러 냈지만, 여러 근거가 더해져
+   * 정확히 -0.5가 되는 것까지는 막을 수 없습니다. 실제로 맨시티 원정(열세)에서
+   * 수비 라인 누적이 -0.5로 나와 라인이 안 내려갔습니다.
+   *
+   * 그래서 부호에 대칭이 되게 자릅니다 — ±0.5는 양쪽 다 한 칸 움직입니다.
+   * 경계에서 어느 쪽으로 붙을지를 「공격 쪽」으로 고정해 둘 이유가 없습니다.
+   */
+  function axisStep(delta) {
+    // || 0으로 -0을 0으로 되돌립니다. -0은 계산에는 지장이 없지만 비교와
+    // 화면 표시에서 0과 다르게 굴어 엉뚱한 곳에서 터집니다.
+    return (delta < 0 ? -Math.round(-delta) : Math.round(delta)) || 0;
+  }
+
   function finaliseInstructions(acc, top) {
     // 플랜 효과를 축·토글에 더합니다.
     top.forEach(function (p, i) {
@@ -728,7 +849,7 @@
     var axes = {};
     Object.keys(TD.AXES).forEach(function (k) {
       var def = TD.AXES[k];
-      var idx = clamp(Math.round(def.def + acc.axis[k]), 0, def.labels.length - 1);
+      var idx = clamp(def.def + axisStep(acc.axis[k]), 0, def.labels.length - 1);
       axes[k] = {
         id: k, ko: def.ko, group: def.group, index: idx, label: def.labels[idx],
         shifted: idx !== def.def, raw: round1(acc.axis[k]),
@@ -2912,6 +3033,121 @@
     };
   }
 
+  /*
+   * ── 슬롯 세트 추천 ──────────────────────────────────────────────────────
+   *
+   * 이 도구는 슬롯을 진단만 하고 있었습니다 — "셋 다 같은 성격입니다", "뼈대가
+   * 쪼개졌습니다". 맞는 말인데, **무엇을 만들어야 하는지는 말하지 않았습니다.**
+   *
+   * 실제 시즌 기록을 받아 보니 그게 그대로 드러났습니다. 원정 네 경기에서 승점 0,
+   * 1득 10실. 강팀 원정에서 꺼낼 형태가 아예 없었던 것인데, 도구는 기본 전술
+   * 하나만 내주고 "슬롯을 저장하세요"라고만 했습니다. 한 장짜리 전술로 시즌을
+   * 치르면 맨시티 원정과 최하위 홈경기를 같은 형태로 치르게 됩니다.
+   *
+   * 그래서 **세 장을 통째로 설계해서 내줍니다.**
+   *   1. 주력      — 대부분의 경기
+   *   2. 버티기     — 강팀 원정, 리드 지키기 (내려앉기 / 역습)
+   *   3. 공략      — 내려앉은 약체 (점유 / 측면 / 중앙 과부하 / 뒷공간)
+   *
+   * 세 장은 **뼈대(뒷선 인원 · 최전방 인원)를 맞춥니다.** 전술 친숙도는 전술마다
+   * 따로 쌓이지만 선수 개인의 포지션 친숙도는 선수한테 쌓이기 때문에, 뼈대가 같은
+   * 슬롯은 훨씬 싸게 익습니다. 뼈대를 맞추느라 점수를 얼마나 손해 봤는지도 같이
+   * 냅니다 — 그 손해가 크면 사람이 직접 판단해야 하니까요.
+   */
+  var KIT_ROLES = [
+    { id: 'primary', ko: '주력', plans: null,
+      why: '대부분의 경기에서 씁니다. 스쿼드에 가장 잘 맞는 형태입니다.' },
+    { id: 'hold', ko: '버티기', plans: ['low-block', 'counter'],
+      why: '강팀 원정, 그리고 리드를 지켜야 하는 마지막 20분에 꺼냅니다. 이게 없으면 강팀 원정을 주력 전술로 치르게 됩니다.' },
+    { id: 'break', ko: '공략', plans: ['possession', 'wide-cross', 'overload-centre', 'in-behind'],
+      why: '내려앉은 약체를 상대할 때 꺼냅니다. 이게 없으면 홈에서 버스를 세운 팀을 못 엽니다.' }
+  ];
+
+  function slotKit(input) {
+    var players = (input.players || []).map(function (p, i) {
+      var c = Object.assign({}, p);
+      c._id = p.id || ('p' + i);
+      c.positions = p.positions || [];
+      c.attrs = p.attrs || {};
+      return c;
+    });
+    players = splitAvailable(players).available;
+    if (players.length < 11) return null;
+
+    var squad = summariseSquad(players);
+    var standing = STANDING_PLAN_PRIOR[input.standing] ? input.standing : 'mid';
+    var fitCache = {};
+
+    // 플랜 × 포메이션 전부를 한 번 훑습니다(빠른 계산). 세 장을 여기서 고릅니다.
+    var grid = [];
+    Object.keys(TD.PLANS).forEach(function (planId) {
+      var planW = planRoleWeights([{ id: planId }]);
+      var bonus = squadPlanBonus(planId, squad);
+      FD.FORMATIONS.forEach(function (f) {
+        var xi = buildXI(players, f, planW, {}, { fitCache: fitCache, fast: true });
+        grid.push({
+          planId: planId, formation: f, xi: xi,
+          shape: shapeOf(f),
+          score: round1(xi.teamFit + xi.planFit * 2 + bonus + basePrior(planId, f, standing))
+        });
+      });
+    });
+    grid.sort(function (a, b) { return b.score - a.score; });
+
+    var primary = grid[0];
+    var usedForm = {}, usedPlan = {};
+    var picks = [];
+
+    KIT_ROLES.forEach(function (role) {
+      var pool = grid.filter(function (c) {
+        if (role.plans && role.plans.indexOf(c.planId) < 0) return false;
+        // 같은 포메이션을 두 슬롯에 넣으면 한 장을 버리는 것과 같습니다.
+        if (usedForm[c.formation.id]) return false;
+        /*
+         * 방향까지 같으면 더 나쁩니다 — 포메이션만 다르고 팀 지시가 글자까지
+         * 같은 두 장을 들고 다니게 됩니다. 세 장을 두는 이유는 상황이 세 가지라서지
+         * 형태가 세 가지라서가 아닙니다.
+         */
+        if (usedPlan[c.planId]) return false;
+        return true;
+      });
+      if (!pool.length) return;
+      // 뼈대가 같은 것 중 최고. 없으면 뼈대를 포기하고 최고를 씁니다.
+      var same = pool.filter(function (c) { return c.shape.key === primary.shape.key; });
+      var pick = same.length ? same[0] : pool[0];
+      var free = pool[0];
+      usedForm[pick.formation.id] = 1;
+      usedPlan[pick.planId] = 1;
+      picks.push({
+        role: role.id, roleKo: role.ko, why: role.why,
+        planId: pick.planId, planKo: TD.PLANS[pick.planId].ko,
+        formationId: pick.formation.id, formationKo: pick.formation.ko,
+        shape: pick.shape, score: pick.score,
+        sameShape: pick.shape.key === primary.shape.key,
+        // 뼈대를 안 따졌으면 나왔을 점수. 이걸 같이 내야 뼈대 비용을 검산할 수 있습니다.
+        freeScore: free.score,
+        /*
+         * 뼈대를 맞추느라 잃은 점수. 크면 사람이 판단해야 합니다 — 훈련이
+         * 쪼개지는 값을 치르더라도 더 맞는 형태를 쓸지는 취향이 아니라 사정입니다.
+         */
+        shapeCost: round1(free.score - pick.score),
+        instructions: planInstructions(pick.planId)
+      });
+    });
+
+    if (!picks.length) return null;
+
+    var offShape = picks.filter(function (p) { return !p.sameShape; });
+    return {
+      shape: primary.shape,
+      picks: picks,
+      offShape: offShape.length,
+      note: offShape.length
+        ? offShape.length + '장은 뼈대가 다릅니다 — 그만큼 전술 훈련이 쪼개집니다.'
+        : '세 장이 뼈대(' + primary.shape.ko + ')를 공유합니다 — 선수 포지션 친숙도를 같이 쓰므로 훨씬 싸게 익습니다.'
+    };
+  }
+
   function baseTactic(input) {
     var players = (input.players || []).map(function (p, i) {
       var c = Object.assign({}, p);
@@ -4287,6 +4523,11 @@
     trainingPlan: trainingPlan,
     pickTactic: pickTactic,
     slotAudit: slotAudit,
+    slotKit: slotKit,
+    KIT_ROLES: KIT_ROLES,
+    planInstructions: planInstructions,
+    axisStep: axisStep,
+    PLAN_EFFECTS: PLAN_EFFECTS,
     squadTiers: squadTiers,
     rotationPlan: rotationPlan,
     matchReview: matchReview,
